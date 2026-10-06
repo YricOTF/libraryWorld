@@ -144,7 +144,9 @@ const CONFIG = {
   cellW: 7.6,               // 列宽（px）
   cellH: 13.0,              // 行高（px）
   charAspect: 0.6,
-  // Consolas / Menlo 的 x-height 比 Courier New 大得多，同样的格子看起来更饱满
+  // 字体：Consolas / Menlo 的 x-height 比 Courier New 大得多，同样的格子里字形饱满约 35%，
+  // 所以观感从"细瘦打字机"变成"厚实终端字"。想回到旧观感，把 Courier New 挪到第一位即可：
+  //   "'Courier New', 'Consolas', 'Menlo', monospace"
   fontFamily: "'Consolas', 'Menlo', 'Courier New', monospace",
   fontSize: 13,             // 字号；calibrateFont() 会按实测推进宽度再校正一次
 
@@ -3645,20 +3647,35 @@ function bindEvents() {
   mainCanvas.addEventListener('pointerdown', function (e) {
     unlockAudio();
     if (STAGE === 'MV' && AUDIO.blocked) { AUDIO.blocked = false; safePlay(); return; }
+    // 音频来源面板优先处理：风格页和报错页都能点（原来被下面的 STAGE 判断挡掉了，
+    // 报错页点 [2] UPLOAD 毫无反应，只剩拖拽能用）
+    if (SRC.open) {
+      const gp = gridFromEvent(e), b = SRC.box;
+      if (DL.view) {                                  // 曲库视图：点行选歌，双击删
+        const row = gp.y - b.y - 4;
+        if (row >= 0 && gp.x > b.x && gp.x < b.x + b.w && row % 2 === 0) {
+          const i = Math.max(0, Math.min(DL.sel - 2, DL.list.length - Math.min(DL.list.length, 6))) + row / 2;
+          if (DL.list[i]) {
+            if (DL.sel === i) cachePlay(DL.list[i].url).then(function (ok) { if (ok) srcOpen(false); });
+            else DL.sel = i;
+          }
+          return;
+        }
+        return;
+      }
+      const inX = gp.x > b.x && gp.x < b.x + b.w;
+      if (inX && gp.y >= b.y + 4 && gp.y <= b.y + 10 && (gp.y - b.y - 4) % 2 === 0) {
+        SRC.sel = (gp.y - b.y - 4) / 2;
+        srcActivate();                          // 面板里只有三个选项，单击直接执行
+        return;
+      }
+      if (inX && gp.y >= b.y && gp.y < b.y + b.h) return;   // 点面板内部其他位置：吞掉，不穿透到风格列表
+    }
     if (STAGE !== 'STYLE') return;
     const g = gridFromEvent(e);
     const ab = styleSelector.audioBox;
     if (ab && g.y >= ab.y && g.y < ab.y + ab.h && g.x >= ab.x && g.x < ab.x + ab.w) {
       srcOpen(true);                          // 点 AUDIO SOURCE 框直接开面板
-      return;
-    }
-    if (SRC.open) {                          // 面板打开时，点击落到面板行上
-      for (let i = 0; i < 3; i++) {
-        if (g.y === SRC.box.y + 4 + i * 2 && g.x > SRC.box.x && g.x < SRC.box.x + SRC.box.w) {
-          SRC.sel = i; srcActivate();          // 面板里只有三个选项，单击直接执行
-          return;
-        }
-      }
       return;
     }
     styleSelector.pointer(g.x, g.y, true);
@@ -3689,9 +3706,9 @@ function bindEvents() {
     if (e.key !== 'Enter') return;
     const u = String(urlInputEl.value || '').trim();
     if (!u) { SRC.note = 'EMPTY ADDRESS'; return; }
-    srcApplyUrl(u, 'url', u.replace(/^.*\//, ''));
+    loadFromUrl(u);
     try { localStorage.setItem(SRC_KEY, u); } catch (er) { /* 忽略 */ }
-    urlInputEl.style.display = 'none';
+    // 先不收起输入框：如果加载失败，用户可以直接改地址重试（Esc 收起）
     e.preventDefault();
   });
   fileInputEl.addEventListener('change', function () {
@@ -3715,7 +3732,7 @@ const SRC = { open: false, sel: 0, mode: 'local', name: '', note: '', flash: 0, 
 function srcOpen(on) {
   SRC.open = !!on;
   if (!SRC.open) { urlInputEl.style.display = 'none'; }
-  else { SRC.sel = 0; SRC.note = ''; }
+  else { SRC.sel = 0; SRC.note = ''; DL.view = false; if (cacheSupported()) cacheList().then(function (l) { DL.list = l; }); }
 }
 // 统一设置音频源（网址或 blob），并接管候选链
 function srcApplyUrl(u, mode, label) {
@@ -3744,20 +3761,189 @@ function srcUseBuiltin() {
 function srcActivate() {
   if (SRC.sel === 0) srcUseBuiltin();
   else if (SRC.sel === 1) { try { fileInputEl.click(); } catch (e) { SRC.note = 'UPLOAD UNAVAILABLE'; } }
-  else { SRC.note = 'TYPE AN ADDRESS, THEN ENTER'; layoutUrlBox(); urlInputEl.style.display = 'block'; urlInputEl.focus(); }
+  else if (SRC.sel === 3) {
+    DL.view = true; DL.sel = 0;
+    if (cacheSupported()) cacheList().then(function (l) { DL.list = l; });
+  }
+  else {
+    SRC.note = 'TYPE AN ADDRESS, THEN ENTER';
+    layoutUrlBox();
+    if (!urlInputEl.value && !urlInputEl.__filled) {
+      try { urlInputEl.value = localStorage.getItem(SRC_KEY) || ''; } catch (e2) { /* 忽略 */ }
+      urlInputEl.__filled = true;
+    }
+    urlInputEl.style.display = 'block';
+    urlInputEl.focus();
+  }
 }
 function srcKey(e) {
   const k = e.key;
+  if (DL.view) {                                   // 曲库子视图
+    if (k === 'Escape' || k === 'Backspace') { DL.view = false; return true; }
+    if (k === 'ArrowUp') { DL.sel = (DL.sel + DL.list.length - 1) % Math.max(1, DL.list.length); return true; }
+    if (k === 'ArrowDown') { DL.sel = (DL.sel + 1) % Math.max(1, DL.list.length); return true; }
+    if (k === 'Enter' && DL.list.length) {
+      cachePlay(DL.list[DL.sel].url).then(function (ok) { if (ok) srcOpen(false); });
+      return true;
+    }
+    if (k === 'x' || k === 'X' || k === 'Delete') { cacheDelete(DL.sel); return true; }
+    return true;
+  }
   if (k === 'Escape' || k === 'm' || k === 'M') { srcOpen(false); return true; }
-  if (k === 'ArrowUp') { SRC.sel = (SRC.sel + 2) % 3; return true; }
-  if (k === 'ArrowDown') { SRC.sel = (SRC.sel + 1) % 3; return true; }
-  if (k === '1' || k === '2' || k === '3') { SRC.sel = Number(k) - 1; return true; }
+  if (k === 'ArrowUp') { SRC.sel = (SRC.sel + 3) % 4; return true; }
+  if (k === 'ArrowDown') { SRC.sel = (SRC.sel + 1) % 4; return true; }
+  if (k === '1' || k === '2' || k === '3' || k === '4') { SRC.sel = Number(k) - 1; return true; }
   if (k === 'Enter') { srcActivate(); return true; }
   return false;
 }
+/* ---------------------------------------------------------------------------
+   [16.7] 音频缓存：把网址下载进网页缓存（Cache Storage）
+   好处：① 下载一次以后离线可播 ② 不再受防盗链/过期签名影响（存的是字节）
+        ③ 进"缓存曲库"列表，之后直接从列表选歌
+   注意：Cache Storage 只在安全上下文（https / localhost）可用，file:// 打开时自动降级为直连播放。
+   --------------------------------------------------------------------------- */
+const CACHE_NAME = 'world-execute-me-audio-v1';
+const DL = { active: false, got: 0, total: 0, url: '', err: '', list: [], sel: 0, view: false };
+
+function cacheSupported() {
+  return (typeof caches !== 'undefined' && caches && typeof caches.open === 'function' &&
+          typeof fetch === 'function' && typeof Response === 'function');
+}
+async function cacheList() {
+  if (!cacheSupported()) return [];
+  try {
+    const c = await caches.open(CACHE_NAME);
+    const keys = await c.keys();
+    const out = [];
+    for (let i = 0; i < keys.length; i++) {
+      const u = keys[i].url;
+      let size = 0;
+      try {
+        const res = await c.match(u);
+        size = res ? (Number(res.headers.get('content-length')) || 0) : 0;
+      } catch (e2) { /* 忽略 */ }
+      let name = u.split('?')[0].split('/').pop() || u;
+      try { name = decodeURIComponent(name); } catch (e3) { /* 忽略 */ }
+      out.push({ url: u, name: name.slice(0, 38), size: size });
+    }
+    return out;
+  } catch (e4) { return []; }
+}
+async function cachePut(url, onProgress) {
+  const res = await fetch(url, { mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer' });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const total = Number(res.headers.get('content-length')) || 0;
+  const type = res.headers.get('content-type') || 'audio/mpeg';
+  let blob;
+  const reader = (res.body && typeof res.body.getReader === 'function') ? res.body.getReader() : null;
+  if (!reader) {
+    blob = await res.blob();
+    if (onProgress) onProgress(blob.size, blob.size);
+  } else {
+    const chunks = [];
+    let got = 0;
+    for (;;) {
+      const r = await reader.read();
+      if (r.done) break;
+      chunks.push(r.value);
+      got += r.value.length;
+      if (onProgress) onProgress(got, total);
+      if (got > 600 * 1024 * 1024) throw new Error('TOO LARGE');   // 600MB 上限，别把用户硬盘吃满
+    }
+    blob = new Blob(chunks, { type: type });
+  }
+  const c = await caches.open(CACHE_NAME);
+  await c.put(url, new Response(blob, {
+    headers: { 'content-type': type, 'content-length': String(blob.size) }
+  }));
+  return blob.size;
+}
+async function cachePlay(url) {
+  if (!cacheSupported()) return false;
+  try {
+    const c = await caches.open(CACHE_NAME);
+    const res = await c.match(url);
+    if (!res) return false;
+    const blob = await res.blob();
+    if (typeof URL === 'undefined' || !URL.createObjectURL) return false;
+    srcApplyUrl(URL.createObjectURL(blob), 'cache', url.split('?')[0].split('/').pop() || 'cached');
+    SRC.note = 'CACHED SOURCE  ·  ' + (blob.size / 1048576).toFixed(1) + ' MB';
+    return true;
+  } catch (e) { return false; }
+}
+async function cacheDelete(i) {
+  const it = DL.list[i];
+  if (!it || !cacheSupported()) return;
+  try { const c = await caches.open(CACHE_NAME); await c.delete(it.url); } catch (e) { /* 忽略 */ }
+  DL.list = await cacheList();
+  if (DL.sel >= DL.list.length) DL.sel = Math.max(0, DL.list.length - 1);
+}
+// 从网址取音频：先尝试下载进缓存（成功则离线可播、还能进曲库），失败再退回直连播放
+function loadFromUrl(u) {
+  try { audioEl.referrerPolicy = 'no-referrer'; } catch (e0) { /* 老浏览器忽略 */ }
+  if (!cacheSupported()) {                     // file:// 或老浏览器：直接播
+    srcApplyUrl(u, 'url', u.replace(/^.*\//, ''));
+    SRC.note = 'DIRECT PLAY (NO CACHE API)';
+    return;
+  }
+  DL.active = true; DL.url = u; DL.got = 0; DL.total = 0; DL.err = '';
+  SRC.note = 'DOWNLOADING ...';
+  SRC.flash = performance.now();
+  cachePut(u, function (got, total) {
+    DL.got = got; DL.total = total;
+    SRC.note = total > 0
+      ? 'DOWNLOADING ' + Math.round(got / total * 100) + '%'
+      : 'DOWNLOADING ' + (got / 1048576).toFixed(1) + ' MB';
+  }).then(function (size) {
+    DL.active = false;
+    return cachePlay(u).then(function (ok) {
+      if (!ok) srcApplyUrl(u, 'cache', u.replace(/^.*\//, ''));
+      SRC.note = 'CACHED  ·  ' + (size / 1048576).toFixed(1) + ' MB  ·  ' + DL.list.length + ' IN LIBRARY';
+    });
+  }).then(function () {
+    return cacheList();
+  }).then(function (l) {
+    DL.list = l;
+  }).catch(function (e) {
+    DL.active = false;
+    DL.err = String((e && e.message) || e).slice(0, 18);
+    // 下载不了（CORS / 403 / 防盗链）→ 退回 <audio> 直连，至少还能试试能不能播
+    srcApplyUrl(u, 'url', u.replace(/^.*\//, ''));
+    SRC.note = 'CACHE FAILED (' + DL.err + ') — DIRECT PLAY';
+  });
+}
+
+function renderCacheList(frame) {
+  const L = getL(), C = COL();
+  const w = Math.min(104, L.C - 20), h = 17;
+  const x = Math.floor((L.C - w) / 2), y = Math.floor((L.R - h) / 2) - 3;
+  SRC.box = { x: x, y: y, w: w, h: h };
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+    frame.erase(x + i, y + j);
+    if (((i + j) % 3) === 0) frame.set(x + i, y + j, '.', C.glowFar);
+  }
+  frame.box(x, y, w, h, C.bright, 'CACHED LIBRARY', C.pure);
+  frame.text(x + w - 10, y, '[ESC] BACK', C.light);
+  if (!DL.list.length) {
+    frame.centerText(y + 7, 'EMPTY — USE [3] LOAD FROM URL', C.mid);
+    frame.centerText(y + 9, 'cached files stay on this device', C.dark);
+  }
+  const rows = Math.min(DL.list.length, 6);
+  const top = Math.max(0, Math.min(DL.sel - 2, DL.list.length - rows));
+  for (let r = 0; r < rows; r++) {
+    const i = top + r, it = DL.list[i], sel = (i === DL.sel), yy = y + 4 + r * 2;
+    frame.text(x + 3, yy, sel ? '>' : ' ', C.pure);
+    frame.text(x + 5, yy, (it.name || it.url).slice(0, 34).padEnd(35, ' '), sel ? C.pure : C.mid, sel);
+    frame.rightText(x + w - 4, yy, it.size ? (it.size / 1048576).toFixed(1) + ' MB' : '--', sel ? C.light : C.dark);
+  }
+  frame.text(x + 3, y + h - 3, 'ENTER PLAY   ·   X DELETE   ·   ESC BACK', C.light);
+  frame.text(x + 3, y + h - 1, DL.list.length + ' CACHED  ·  ' + (cacheSupported() ? 'CACHE STORAGE ACTIVE' : 'CACHE API UNAVAILABLE'), C.dark);
+}
+
 function renderSrcPanel(frame) {
   const L = getL(), C = COL();
-  const w = Math.min(104, L.C - 20), h = 15;
+  if (DL.view) { renderCacheList(frame); return; }
+  const w = Math.min(104, L.C - 20), h = 17;
   const x = Math.floor((L.C - w) / 2), y = Math.floor((L.R - h) / 2) - 3;
   SRC.box = { x: x, y: y, w: w, h: h };
   for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
@@ -3769,7 +3955,9 @@ function renderSrcPanel(frame) {
   const items = [
     ['1', 'BUILT-IN FILE', SRC.mode === 'local' ? 'ACTIVE' : 'music.mp3 / flac / ogg ...'],
     ['2', 'UPLOAD FROM DISK', SRC.mode === 'file' ? (SRC.name || 'ACTIVE') : 'click here -> file dialog'],
-    ['3', 'LOAD FROM URL', SRC.mode === 'url' ? (SRC.name || 'ACTIVE') : 'type an http(s) address']
+    ['3', 'LOAD FROM URL', SRC.mode === 'url' ? (SRC.name || 'ACTIVE') : (cacheSupported() ? 'download into web cache' : 'type an http(s) address')],
+    ['4', 'CACHED LIBRARY', !cacheSupported() ? 'needs https / localhost'
+      : (DL.list.length ? DL.list.length + ' song(s) offline' : 'empty — cache a url first')]
   ];
   for (let i = 0; i < items.length; i++) {
     const sel = (i === SRC.sel), yy = y + 4 + i * 2;
@@ -3777,8 +3965,10 @@ function renderSrcPanel(frame) {
     frame.text(x + 5, yy, ('[' + items[i][0] + '] ' + items[i][1]).padEnd(24, ' '), sel ? C.pure : C.mid, sel);
     frame.text(x + 31, yy, items[i][2].slice(0, w - 34), sel ? C.light : C.dark);
   }
-  const src = (AUDIO_CANDIDATES[0] || 'music.mp3');
-  frame.text(x + 4, y + h - 4, 'SOURCE : ' + String(src).slice(0, w - 14), C.dark);
+  const src = String(AUDIO_CANDIDATES[0] || 'music.mp3');
+  const srcCols = w - 6;
+  frame.text(x + 4, y + h - 4, ('SOURCE : ' + src).slice(0, srcCols), C.dark);
+  if (src.length + 9 > srcCols) frame.set(x + 3 + srcCols, y + h - 4, '>', C.mid);   // 截断标记
   frame.text(x + 4, y + h - 2, SRC.note || 'CLICK OR UP/DOWN + ENTER   ·   ESC CLOSE   ·   DROP A FILE ANYWHERE', C.light);
 }
 function layoutUrlBox() {
@@ -3862,6 +4052,17 @@ audioEl.addEventListener('durationchange', function () {
 });
 audioEl.addEventListener('error', function () {
   if (AUDIO.ok) return;                         // 播放中途出错不切换源
+  // 用户手动选的来源（上传文件 / 网址）失败时，不要把他甩回报错页 —— 那样看着就是"没反应"。
+  // 就地说明原因，让他能马上换一个。
+  if (SRC.mode === 'file' || SRC.mode === 'url') {
+    const ec = (audioEl.error && audioEl.error.code) | 0;
+    SRC.note = 'LOAD FAILED — ' + (ec === 4 ? 'UNSUPPORTED / 403 / 404'
+      : ec === 3 ? 'DECODE ERROR' : ec === 2 ? 'NETWORK ERROR' : ec === 1 ? 'ABORTED' : 'UNKNOWN');
+    SRC.flash = performance.now();
+    if (STAGE === 'ERROR') enterStage('STYLE');
+    else if (STAGE === 'LOADING') LOAD.forced = true;   // 别卡在同步页
+    return;
+  }
   loadSource(AUDIO.idx + 1);
 });
 audioEl.addEventListener('ended', function () { if (STAGE === 'MV') enterStage('END'); });
