@@ -2,6 +2,12 @@
 
 双击 `index.html` 即可播放。**不需要服务器、不需要构建、不引用任何外部库**（无 CDN、无 WebGL）。
 
+> **部署到 GitHub Pages / 音频放哪**：在风格选择页按 **`M`** 打开 `AUDIO SOURCE` 面板，可以
+> ①用内置文件 ②上传本地音频 ③直接填网址。有了 ③，音频根本不必进仓库——
+> 放到 GitHub Release 资产、对象存储或任何直链都行（注意 GitHub 网页上传单文件上限 25 MB，
+> 附带的是 25.9 MB 的 flac，网页上传会被拒；命令行 `git push` 上限 100 MB 则没问题）。
+> 仓库里放不下/不想放，转成 192 kbps mp3 大约 5 MB，最省事。
+
 ## 音频放哪
 
 放在 `index.html` **同目录**，程序按以下顺序自动尝试，第一个能加载的就用：
@@ -22,9 +28,15 @@ music.mp3  →  music.flac  →  music.ogg  →  music.wav  →  music.m4a
 4. **MV** — 主视觉由**歌词驱动**：唱到哪一句就画那件事（`If I'm a circle` 画圆、`CIRCUMFERENCE` 沿圆周描边、`TANGENTS` 画切线、`VIBRATIONS` 画示波器、`Switch my gender` 画 F↔M……）。数学图形全部用参数方程真画，图标是 ASCII 贴图，**123 句里 122 句有自己的画面**（唯一例外是 0.1s 那句，落在开场 1 秒的不渲染窗口里，1 秒后补上）。
    没有对应歌词的段落（前奏、间奏、纯音乐）才回落到场景自己的子阶段动画，此时场景边界 = 歌词关键句的真实时间点（29.709 / 88.587 / 147.660 / 178.173 秒 ÷ 实际时长）。动画时间 = `audio.currentTime - 起播时刻`。
 
-   **具体意象用具体画法**：`NUTRIENTS` 画维生素 C 的六元环骨架（C6H8O6 + OH 取代基 + 交替双键）、`ANTIOXIDANTS` 画番茄红素的长共轭链（C40H56）、`ALGEBRAIC EXPRESSION OF LO-O-OVE` 画心形线并标注 `(x²+y²−1)³ = x²y³`；茄子、番茄、花猫这些是重画过的高分辨率 ASCII 图（不是抽象符号）。
+   **具体意象用具体画法**：`YOU HAVE LEFT` 每唱一句，背影小人就往右走远一段、颜色更淡一档（脚印留在身后、距离计数递增）；`COMPLETION` / `SATISFACTION` 是真的进度条（随句子填满并显示百分比）；`NUTRIENTS` 画维生素 C 的六元环骨架（C6H8O6 + OH 取代基 + 交替双键）、`ANTIOXIDANTS` 画番茄红素的长共轭链（C40H56）、`ALGEBRAIC EXPRESSION OF LO-O-OVE` 画心形线并标注 `(x²+y²−1)³ = x²y³`；茄子、番茄、花猫这些是重画过的高分辨率 ASCII 图（不是抽象符号）。
 
-   **叙事节奏**：官方歌词里 `Though you have left`（110.9s）是情绪拐点——从这里开始字符雨变长变快并夹杂红色碎片，画面前后半段明显不同；`EXECUTION` 十二连唱时文字在白色与红色间高频交替，表现"执行/处决"的双关；最后三秒收尾清空，只剩 `world.execute(me);` 与闪烁光标。
+   **叙事节奏**：官方歌词里 `Though you have left`（110.9s）是情绪拐点——从这里开始**每唱一句系统就烂得更彻底**（行位移 + 随机乱码 + 红色碎片逐级递增），到 `ILLEGAL ARGUMENTS` 亮出巨大的红色 `ILLEGAL / ARGUMENTS`；`EXECUTION` 十二连唱时换成**控制台疯狂刷执行语句**（exec(world, me); / kill(others.all); / syscall(9, SIGKILL); …，每行带 [ OK ] 或 [KILL]，台阶式高速滚动）；最后三秒收尾清空，只剩 `world.execute(me);` 与闪烁光标。
+
+   **开场**：第一句主歌之前的整段是 **`ME SYSTEM SELF TEST` 自检表**，唱一句点亮一行（POWER LINE / PROTECTION / PIECES / OBJECT CREATION / DATA PARAMETERS / INITIALIZATION / NEW WORLD / SIMULATION / CALL），底部配进度条；随后 13 秒间奏亮出**标题卡**（`MILI` 用点阵大字，标题与专辑名次之，不做成 execute 的强调）。
+
+   **屏幕震动**：整屏（画面层）位移，两个正弦叠加成衰减振荡，扫描线与暗角不动——相当于显像管被敲了一下。触发点：随机故障、EXECUTION 每句、倒计时每个数字、ILLEGAL ARGUMENTS（持续）、控制台段（持续微震）、You have left 之后随混乱度递增、心形心跳、裂缝每 1.2 秒、MV 开场。幅度是强度平方 × 最大 20px，约 0.45 秒收尾。
+
+   **动效风格**：所有图形动画走 **10fps 台阶时钟**（`stepT()`）并带 ±1 格抖动，刻意不做平滑插值；旋涡、示波器、交流波这类原本按秒循环的相位改成**按句内进度走完一遍**，不会在一句里转好几圈。
 
 ## 按键
 
@@ -38,7 +50,8 @@ music.mp3  →  music.flac  →  music.ogg  →  music.wav  →  music.m4a
 | 面板内 `R` / `C` / `ESC` | 重置全部参数 / 复制配置 JSON / 关闭 |
 | `空格` | 暂停 / 继续（MV） |
 | `←` `→` | 快退 / 快进 10 秒（MV，面板关闭时） |
-
+| `M` | 音频来源面板（风格选择页：内置文件 / 上传本地音频 / 填网址） |
+| 面板内 `↑↓` `Enter` `Esc` | 选择来源 / 确认 / 关闭（也可直接把音频文件拖进窗口） |
 可调参数：风格、辉光强度、扫描线透明度、暗角强度、故障间隔、网格列数、网格行数、目标帧率、场景锁定（调试用，锁定后场景按 20 秒一轮循环，副标题右侧显示 `[DEBUG: LOCKED]`）。
 
 ## 歌词

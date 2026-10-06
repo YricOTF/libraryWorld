@@ -30,8 +30,8 @@ body { display: flex; align-items: center; justify-content: center; }
   image-rendering: auto;
 }
 
-/* 对话阶段的行内输入框：透明、无边框、颜色跟随当前风格，看起来就是终端的一行 */
-#userInput {
+/* 行内输入框（对话 / 音频网址）：透明、无边框、颜色跟随当前风格 */
+#userInput, #urlInput {
   position: absolute; display: none;
   background: transparent; border: none; outline: none;
   border-bottom: 1px solid currentColor;
@@ -49,6 +49,9 @@ body { display: flex; align-items: center; justify-content: center; }
     <!-- 对话阶段的真实输入框（唯一允许存在的 HTML 表单元素，按网格坐标对齐） -->
     <input id="userInput" type="text" maxlength="64" autocomplete="off"
            autocapitalize="off" autocorrect="off" spellcheck="false">
+    <!-- 音频来源面板里的网址输入框 + 隐藏的文件选择器 -->
+    <input id="urlInput" type="text" maxlength="512" autocomplete="off" spellcheck="false">
+    <input id="fileInput" type="file" accept="audio/*" style="display:none">
   </div>
   <!-- 离屏画布：字符网格的逐字符渲染目标（尺寸在 initGrid() 里按格子数设定） -->
   <canvas id="offCanvas" style="display:none"></canvas>
@@ -88,13 +91,14 @@ const CONFIG = {
   // —— 字符网格 ——
   // 需求里写"offCanvas 分辨率等于字符网格尺寸（200x72）"，但 1 格 = 1 像素时
   // fillText 无法成形，因此每格给固定像素 CELL_W x CELL_H，网格仍是 200x72 格。
-  gridCols: 200,
-  gridRows: 72,
-  cellW: 7.2,               // 列宽（px）：0.6 字宽比 x 12px 字号，保证等宽推进精确对齐
-  cellH: 12.2,              // 行高（px）
+  gridCols: 184,            // 184x64：同样铺满窗口，但每格更大 → 字更大
+  gridRows: 64,
+  cellW: 7.6,               // 列宽（px）
+  cellH: 13.0,              // 行高（px）
   charAspect: 0.6,
-  fontFamily: "'Courier New', 'Consolas', 'Menlo', monospace",
-  fontSize: 12,             // 字号；cellW = fontSize * 0.6 是等宽字体的推进宽度
+  // Consolas / Menlo 的 x-height 比 Courier New 大得多，同样的格子看起来更饱满
+  fontFamily: "'Consolas', 'Menlo', 'Courier New', monospace",
+  fontSize: 13,             // 字号；calibrateFont() 会按实测推进宽度再校正一次
 
   // —— 颜色与效果（由 STYLE.apply 注入）——
   colors: {},
@@ -418,6 +422,8 @@ const mainCtx = mainCanvas.getContext('2d');
 const offCtx = offCanvas.getContext('2d');
 const stageEl = document.getElementById('stage');
 const inputEl = document.getElementById('userInput');
+const urlInputEl = document.getElementById('urlInput');
+const fileInputEl = document.getElementById('fileInput');
 
 // 合成用的离屏缓冲：两层 Bloom + 一层色偏
 const bloomA = document.createElement('canvas');   // 1/4 缩放的廉价模糊（核心辉光）
@@ -441,12 +447,15 @@ const FX = {
   nextGlitch: 4,        // 下次随机故障的时间点
   flash: 0,             // 白闪强度 0..1
   fade: 0,              // 黑场强度 0..1
-  shake: 0,             // 抖动强度 0..1
+  shake: 0,             // 屏幕震动强度 0..1
+  shakeT: 0,            // 本次震动已经过去的时间（驱动衰减振荡）
   tintColor: null,      // 染色（场景红闪）
   tintAlpha: 0,
   scanOffset: 0
 };
 function triggerGlitch(dur) { FX.glitch = Math.max(FX.glitch, dur || 0.15); }
+// 屏幕震动：整屏（画面层）位移，不是字形错位；强度取最大值，之后按平方衰减
+function triggerShake(a) { FX.shake = Math.min(1, Math.max(FX.shake, a || 0.2)); FX.shakeT = 0; }
 function triggerFlash(a) { FX.flash = Math.max(FX.flash, a === undefined ? 1 : a); }
 function triggerTint(color, alpha) { FX.tintColor = color; FX.tintAlpha = alpha; }
 
@@ -456,11 +465,13 @@ function updateFX(dt) {
   FX.scanOffset = (FX.scanOffset + 30 * dt) % 4;      // 扫描线每秒下滑 30px
   FX.flash = Math.max(0, FX.flash - dt * 3.2);
   FX.fade = Math.max(0, FX.fade - dt * 1.4);
-  FX.shake = Math.max(0, FX.shake - dt * 2.6);
+  FX.shake = Math.max(0, FX.shake - dt * 2.2);
+  FX.shakeT += dt;
   FX.tintAlpha = Math.max(0, FX.tintAlpha - dt * 4.5);
   if (FX.glitch > 0) FX.glitch = Math.max(0, FX.glitch - dt);
   else if (FX.t > FX.nextGlitch) {
     triggerGlitch(0.15);
+    triggerShake(0.26 + Math.random() * 0.22);
     FX.nextGlitch = FX.t + CONFIG.glitchInterval * (0.55 + Math.random() * 0.9);
   }
 }
@@ -685,9 +696,14 @@ function compositeToMain() {
   ctx.fillRect(0, 0, v.vw, v.vh);
 
   let dx = v.dx, dy = v.dy;
-  if (FX.shake > 0.001) {                       // 故障抖动
-    dy += (hash11(FX.t * 61.7) - 0.5) * FX.shake * 14;
-    dx += (hash11(FX.t * 97.3 + 5.1) - 0.5) * FX.shake * 8;
+  if (FX.shake > 0.002) {
+    // 衰减振荡：两个正弦叠加成"咚"一下的撞击感，再掺一点随机让它不机械。
+    // 只位移画面层（清晰层/Bloom/色偏），扫描线与暗角不动 —— 相当于显像管被敲了一下。
+    const s = FX.shake * FX.shake;                       // 平方衰减，收尾自然
+    const t = FX.shakeT;
+    const rnd = hash11(Math.floor(t * 60) * 7.31) - 0.5;
+    dx += (Math.sin(t * 47) * 0.62 + Math.sin(t * 113 + 1.7) * 0.38 + rnd * 0.5) * s * 20;
+    dy += (Math.sin(t * 59 + 1.1) * 0.62 + Math.sin(t * 97 + 0.4) * 0.38 + rnd * 0.4) * s * 12;
   }
 
   // 1) 清晰层：完全不透明，保证字符主体锐利
@@ -771,18 +787,19 @@ function compositeToMain() {
 }
 
 /* 把 HTML 输入框对齐到指定的网格坐标（对话阶段的终端输入行） */
-const INPUT_GRID = { x: 30, y: 30, w: 140 };
-function layoutInputBox() {
+const INPUT_GRID = { x: 32, y: 30, w: 52 };      // 短字段：太长会横穿对话框
+function placeInput(el, gx, gy, gw) {
   const v = viewRect();
   const cw = v.dw / CONFIG.gridCols, chh = v.dh / CONFIG.gridRows;
-  inputEl.style.left = (v.dx + INPUT_GRID.x * cw) + 'px';
-  inputEl.style.top = (v.dy + (INPUT_GRID.y - 0.2) * chh) + 'px';
-  inputEl.style.width = (INPUT_GRID.w * cw) + 'px';
-  inputEl.style.height = (chh * 1.5) + 'px';
-  inputEl.style.fontSize = (CONFIG.fontSize * (v.dw / CONFIG.gridCols) / 7.2) + 'px';
-  inputEl.style.color = CONFIG.colors.bright || '#ffffff';
-  inputEl.style.borderBottomColor = CONFIG.colors.bright || '#ffffff';
+  el.style.left = (v.dx + gx * cw) + 'px';
+  el.style.top = (v.dy + (gy - 0.2) * chh) + 'px';
+  el.style.width = (gw * cw) + 'px';
+  el.style.height = (chh * 1.5) + 'px';
+  el.style.fontSize = (CONFIG.fontSize * (v.dw / CONFIG.gridCols) / CONFIG.cellW) + 'px';
+  el.style.color = CONFIG.colors.bright || '#ffffff';
+  el.style.borderBottomColor = CONFIG.colors.bright || '#ffffff';
 }
+function layoutInputBox() { placeInput(inputEl, INPUT_GRID.x, INPUT_GRID.y, INPUT_GRID.w); }
 function showInputBox(on) {
   if (on) { layoutInputBox(); inputEl.style.display = 'block'; }
   else { inputEl.style.display = 'none'; inputEl.value = ''; }
@@ -1292,14 +1309,15 @@ function shiftRow(frame, y, off) {
    坐标系约定：S = 横向尺度（列），Sy = 纵向尺度（行）= S × 0.6，
    正好抵消字符 7.2×12.2 的宽高比，所以画出来的圆是真圆、不是椭圆。
    =========================================================================== */
-const VIS = { idx: -1, m: null, p: 0, line: null };
+const VIS = { idx: -1, lastIdx: -2, m: null, p: 0, line: null };
 let MOTIF_BY_INDEX = [];      // 与 CONFIG.lyrics 一一对应，构建时算一次，运行期零正则
 let GRIEF_IDX = -1;           // "Though you have left" 那一句的下标：从这里开始画面转入崩塌
+let LEAVE_OCC = [];           // 每一句时，"You have left" 已经唱到第几次（用来让背影一次次走远）
 
 /* ---------- 贴图：小 ASCII 图标（空格透明，不遮住氛围底）---------- */
 const ART = {
   plug: ['      .---.      ', '  ====|###|====  ', "      `---'      ", '       /|\\       ', '      * | *      '],
-  belt: ['  [##########]   ', '   \\        /    ', '    \\______/     ', '     SAFETY      '],
+  belt: ['  [##########]   ', '   \\        /    ', '    \\______/     ', '     \\    /      ', '      \\  /       '],
   shield: ['    ________     ', '   /        \\    ', '  |   [#]    |   ', '   \\        /    ', '    \\______/     '],
   blinds: [' ==============  ', '  =============  ', '   ===========   ', '    =========    ', '     =======     '],
   cage: ['  +--+--+--+--+  ', '  |  |  |  |  |  ', '  +--+--o--+--+  ', '  |  |  |  |  |  ', '  +--+--+--+--+  '],
@@ -1338,7 +1356,7 @@ const ART = {
   gender: ['   [F] --> [M]   ', '    |       |    ', '    +-------+    '],
   clock: ['     .---.       ', '    /  |  \\      ', '   |   |   |     ', '    \\  |  /      ', "     `---'       "],
   role: ['   [S] <-> [M]   ', '    |       |    ', '    +-------+    '],
-  progress: [' [##########]    ', '     100%        '],
+  progress: [' [##########]    ', '  [##########]   ', '   [##########]  '],
   walk: ['       o         ', '      /|\\        ', '      / \\        ', '   .    .    .   '],
   crack: ['   ### ###       ', '  #####|#####    ', '   ### | ###     ', '     # | #       '],
   beam: ['  =========>||   ', '  =========>||   ', '  =========>||   '],
@@ -1374,36 +1392,40 @@ function stampArt(frame, name, cx, cy, col, glow, sc) {
   }
 }
 
-/* ---------- 数学图形：参数方程真画 ---------- */
+/* ---------- 阶跃时钟：动效不做平滑插值，一律按 10fps 台阶跳（问题：要"有动效但不平滑"）---------- */
+function stepT(fps) { return Math.floor(FX.t * (fps || 10)) / (fps || 10); }
+
+/* ---------- 数学图形：全部用参数方程真画 ---------- */
 function figArea() {
   const L = getL();
-  const S = (L.cx1 - L.cx0) * 0.205;                  // ≈ 28.7 列
-  return { L: L, cx: Math.round((L.cx0 + L.cx1) / 2), cy: L.mainTop + 19, S: S, Sy: S * 0.6 };
+  const H = L.mainBot - L.mainTop, W = L.cx1 - L.cx0;
+  const Sy = Math.min(H * 0.34, W * 0.14);            // 行尺度（随主内容区自适应）
+  const S = Sy / 0.6;                                 // 列尺度，抵消字符宽高比
+  return { L: L, cx: Math.round((L.cx0 + L.cx1) / 2), cy: L.mainTop + Math.round(H * 0.40), S: S, Sy: Sy };
 }
 function drawFigure(frame, m, p, col, dim, bright) {
   const name = m.f;
   const A = figArea(), L = A.L, cx = A.cx, cy = A.cy, S = A.S, Sy = A.Sy;
-  const rev = easeOut(clamp(p / 0.55, 0, 1));         // "画出来"的进度
+  const rev = easeOut(clamp(p / 0.55, 0, 1));          // "画出来"的进度（每句只跑一遍，不循环）
+  const T = stepT(10);                                 // 台阶时间（非平滑）
   const inBox = (x, y) => (x >= L.cx0 && x <= L.cx1 && y >= L.mainTop && y <= L.mainBot);
   switch (name) {
-    case 'points': {                                  // If I'm a set of points
+    case 'points': {
       for (let i = 0; i < 130; i++) {
         const h1 = hash11(i * 1.7), h2 = hash11(i * 3.3), h3 = hash11(i * 5.9);
         if (h3 > rev) continue;
-        const x = Math.round(cx + (h1 * 2 - 1) * S * 1.9);
-        const y = Math.round(cy + (h2 * 2 - 1) * Sy * 1.0);
-        frame.set(x, y, i % 13 === 0 ? 'o' : (i % 3 === 0 ? '+' : '.'), i % 13 === 0 ? bright : col, i % 13 === 0);
+        frame.set(Math.round(cx + (h1 * 2 - 1) * S * 1.9), Math.round(cy + (h2 * 2 - 1) * Sy * 1.0),
+          i % 13 === 0 ? 'o' : (i % 3 === 0 ? '+' : '.'), i % 13 === 0 ? bright : col, i % 13 === 0);
       }
       const marks = ['A', 'B', 'C', 'D'];
       for (let i = 0; i < 4; i++) {
         if ((i + 1) / 4 > rev) break;
-        const x = Math.round(cx + (hash11(i * 9.1) * 2 - 1) * S * 1.5);
-        const y = Math.round(cy + (hash11(i * 4.7) * 2 - 1) * Sy * 0.85);
-        frame.text(x + 2, y, marks[i], col);
+        frame.text(Math.round(cx + (hash11(i * 9.1) * 2 - 1) * S * 1.5) + 2,
+          Math.round(cy + (hash11(i * 4.7) * 2 - 1) * Sy * 0.85), marks[i], col);
       }
       break;
     }
-    case 'axes3d': {                                  // DIMENSION
+    case 'axes3d': {
       for (let i = -Math.round(S * 1.5); i <= S * 1.5; i++) if (Math.abs(i) / (S * 1.5) <= rev) frame.set(cx + i, cy + 6, '-', dim);
       for (let j = -Math.round(Sy * 0.8); j <= Sy * 0.8; j++) if (Math.abs(j) / (Sy * 0.8) <= rev) frame.set(cx, cy + 6 + j, '|', dim);
       const w = S * 0.9 * rev, h = Sy * 0.62 * rev, d = S * 0.38 * rev;
@@ -1419,7 +1441,7 @@ function drawFigure(frame, m, p, col, dim, bright) {
       frame.text(cx + Math.round(S * 1.5) + 2, cy + 6, 'z', col);
       break;
     }
-    case 'circle': {                                  // If I'm a circle
+    case 'circle': {
       const r = S * 1.0, n = 420;
       for (let i = 0; i < n * rev; i++) {
         const th = (i / n) * Math.PI * 2;
@@ -1429,7 +1451,7 @@ function drawFigure(frame, m, p, col, dim, bright) {
       frame.text(cx + 3, cy - 1, 'r', col);
       break;
     }
-    case 'circum': {                                  // CIRCUMFERENCE
+    case 'circum': {
       const r = S * 1.0, n = 420, head = rev * n;
       for (let i = 0; i < n; i++) {
         const th = (i / n) * Math.PI * 2;
@@ -1440,7 +1462,7 @@ function drawFigure(frame, m, p, col, dim, bright) {
       frame.text(cx + 3, cy + 2, 'C = 2πr', col);
       break;
     }
-    case 'sine': {                                    // If I'm a sine wave
+    case 'sine': {
       const w = S * 1.85, amp = Sy * 0.85;
       for (let x = -w; x <= w; x++) {
         if ((x + w) / (2 * w) > rev) break;
@@ -1449,7 +1471,7 @@ function drawFigure(frame, m, p, col, dim, bright) {
       for (let x = -w; x <= w; x++) frame.set(Math.round(cx + x), cy + Math.round(Sy * 0.95), '-', dim);
       break;
     }
-    case 'tangent': {                                 // TANGENTS
+    case 'tangent': {
       const w = S * 1.85, amp = Sy * 0.85, k = 3.4 / w;
       for (let x = -w; x <= w; x++) {
         if ((x + w) / (2 * w) > rev) break;
@@ -1468,7 +1490,7 @@ function drawFigure(frame, m, p, col, dim, bright) {
       }
       break;
     }
-    case 'infinity': {                                // If I approach infinity
+    case 'infinity': {
       const n = 560;
       for (let i = 0; i < n * rev; i++) {
         const th = (i / n) * Math.PI * 2;
@@ -1477,11 +1499,10 @@ function drawFigure(frame, m, p, col, dim, bright) {
       }
       break;
     }
-    case 'limit': {                                   // LIMITATIONS
+    case 'limit': {
       const w = S * 1.6, h = Sy * 0.9, y0 = cy + 6;
       for (let i = -w; i <= w; i++) frame.set(Math.round(cx + i), Math.round(y0), '-', dim);
       for (let j = -h; j <= h; j++) frame.set(cx, Math.round(y0 + j), '|', dim);
-      // 双曲线 y = a / x 的两支（a 取 h*w/4，保证曲线正好落在可视范围内）
       const a = h * w / 4;
       for (let i = 1; i < w; i++) {
         const y = a / i;
@@ -1493,42 +1514,57 @@ function drawFigure(frame, m, p, col, dim, bright) {
       frame.text(cx + 3, Math.round(y0 - h), 'lim  f(x) = INF', col);
       break;
     }
-    case 'ac': {                                      // Switch my current
-      const w = S * 1.8, amp = Sy * 0.8;
+    case 'ac': {
+      const w = S * 1.8, amp = Sy * 0.85, y0 = cy + 2;
+      const kk = Math.PI * 6 / (2 * w);                      // 三个完整周期
+      for (let x = -w; x <= w; x++) frame.set(Math.round(cx + x), y0, '-', dim);
       for (let x = -w; x <= w; x++) {
         if ((x + w) / (2 * w) > rev) break;
-        frame.set(Math.round(cx + x), Math.round(cy + Math.sin(x * 0.09 + FX.t * 5) * amp), '~', col);
+        const y = Math.sin(x * kk) * amp;
+        frame.set(Math.round(cx + x), Math.round(y0 + y), '#', col, Math.abs(y) > amp * 0.82);
       }
-      frame.text(cx + Math.round(w * 0.5), cy - Math.round(amp) - 2, 'AC', bright, true);
+      frame.text(Math.round(cx - w), y0 - Math.round(amp) - 2, 'AC INPUT', bright, true);
+      frame.rightText(Math.round(cx + w), y0 - Math.round(amp) - 2, 'f = 50 Hz', dim);
       break;
     }
-    case 'dc': {                                      // To AC to DC
-      const w = S * 1.8, amp = Sy * 0.8, cut = -w * 0.35;
-      for (let x = -w; x <= cut; x++) frame.set(Math.round(cx + x), Math.round(cy + Math.sin(x * 0.09 + FX.t * 5) * amp), '~', col);
-      for (let x = Math.round(cut); x <= w; x++) {
-        const k = clamp((x - cut) / (w * 0.35), 0, 1);
-        if (x > cut + 1) frame.set(cx + x, cy, k > 0.95 ? '=' : '+', k > 0.95 ? bright : col, k > 0.95);
+    case 'dc': {
+      // 左：交流输入（三周期）→ 中：整流器 → 右：带极小微纹的直流平线
+      const w = S * 1.8, amp = Sy * 0.85, y0 = cy + 2;
+      const cut = -w * 0.15, wl = cut + w;                   // 左半段宽度
+      const kk = Math.PI * 6 / wl;
+      for (let x = -w; x <= cut; x++) {
+        if ((x + w) / wl > rev) break;
+        frame.set(Math.round(cx + x), Math.round(y0 + Math.sin((x + w) * kk) * amp), '~', col);
       }
-      frame.text(cx - Math.round(w * 0.6), cy - Math.round(amp) - 2, 'AC', col);
-      frame.text(cx + Math.round(w * 0.5), cy - 2, 'DC', bright, true);
+      const dx0 = Math.round(cut) + 3;
+      if (rev > 0.45) {
+        const dk = clamp((rev - 0.45) / 0.2, 0, 1);
+        if (dk > 0.3) frame.text(Math.round(cx + cut) + 4, y0 - 1, '|>|', bright, true);
+      }
+      for (let x = dx0; x <= w; x++) {
+        if ((x - dx0) / Math.max(1, w - dx0) > clamp((rev - 0.55) / 0.45, 0, 1)) break;
+        frame.set(Math.round(cx + x), Math.round(y0 + Math.sin(x * 0.7) * 0.6), '=', col, true);
+      }
+      frame.text(Math.round(cx - w), y0 - Math.round(amp) - 2, 'AC IN', col);
+      frame.text(Math.round(cx + cut) + 2, y0 + Math.round(amp) + 2, 'RECTIFIER', dim);
+      frame.rightText(Math.round(cx + w), y0 - Math.round(amp) - 2, 'DC OUT', bright, true);
       break;
     }
-    case 'spiral': {                                  // dizzy / trance
+    case 'spiral': {
       const n = 760;
       for (let i = 0; i < n * rev; i++) {
         const q = i / n;
-        const th = q * Math.PI * 7 + FX.t * 1.2;
+        const th = q * Math.PI * 7 + p * Math.PI * 2.2;   // 每句只转一圈多一点（原为按秒循环，太快）
         frame.set(Math.round(cx + Math.cos(th) * q * S * 1.5), Math.round(cy + Math.sin(th) * q * Sy * 1.0),
           q > 0.85 ? '@' : (q > 0.5 ? '#' : '.'), q > 0.5 ? col : dim, q > 0.85);
       }
       break;
     }
-    case 'rings': {                                   // So deeply so deeply
-      const shrink = clamp((FX.t * 0.25) % 1, 0, 1);
+    case 'rings': {
       for (let k = 0; k < 8; k++) {
         const q = (k + 1) / 8;
         if (q > rev + 0.12) continue;
-        const r = q * (1 - shrink * 0.12);
+        const r = q * (1 - clamp(p, 0, 1) * 0.12);        // 一圈只收缩一次
         const n = 90;
         for (let i = 0; i < n; i++) {
           const th = (i / n) * Math.PI * 2;
@@ -1538,7 +1574,7 @@ function drawFigure(frame, m, p, col, dim, bright) {
       }
       break;
     }
-    case 'merge': {                                   // And we can unite
+    case 'merge': {
       const off = (1 - rev) * S * 0.95, r = S * 0.62;
       for (const s of [-1, 1]) {
         const n = 180;
@@ -1550,7 +1586,7 @@ function drawFigure(frame, m, p, col, dim, bright) {
       if (rev > 0.88) frame.centerText(cy, 'UNITED', bright, true);
       break;
     }
-    case 'timeline': {                                // To A.D to B.C
+    case 'timeline': {
       const w = S * 1.9;
       for (let i = -w; i <= w; i++) frame.set(Math.round(cx + i), cy, '-', dim);
       for (let i = -w; i <= w; i += Math.round(w / 4)) frame.set(Math.round(cx + i), cy - 1, '|', col);
@@ -1561,8 +1597,8 @@ function drawFigure(frame, m, p, col, dim, bright) {
       frame.rightText(Math.round(cx + w), cy - 3, 'A.D', col);
       break;
     }
-    case 'globe': {                                   // Set up our new world
-      const r = S * 0.95;
+    case 'globe': {
+      const r = S * 0.95, spin = stepT(6) * 0.6;          // 台阶式自转
       for (let i = 0; i < 300; i++) {
         const th = (i / 300) * Math.PI * 2;
         frame.set(Math.round(cx + Math.cos(th) * r), Math.round(cy + Math.sin(th) * r * 0.6), '#', col);
@@ -1572,23 +1608,101 @@ function drawFigure(frame, m, p, col, dim, bright) {
         for (let i = 0; i < n; i++) {
           const th = (i / n) * Math.PI * 2;
           frame.set(Math.round(cx + Math.cos(th) * r), Math.round(cy + Math.sin(th) * rr * 0.6), '.', dim);
-          frame.set(Math.round(cx + Math.cos(th) * rr), Math.round(cy + Math.sin(th) * r * 0.6), '.', dim);
+          frame.set(Math.round(cx + Math.cos(th + spin) * rr), Math.round(cy + Math.sin(th) * r * 0.6), '.', dim);
         }
       }
       break;
     }
-    case 'scope': {                                   // VIBRATIONS
+    case 'scope': {
       const w = S * 1.9, amp = Sy * 0.95;
-      const beat = Math.pow(1 - ((FX.t * BEAT_BPM / 60) % 1), 2);
+      const beat = Math.pow(1 - ((stepT(8) * BEAT_BPM / 60) % 1), 2);
       for (let x = -w; x <= w; x++) {
         const env = Math.exp(-Math.abs(x) / (w * 0.5));
-        const y = Math.sin(x * 0.22 + FX.t * 7) * amp * env * (0.35 + beat * 0.65);
+        const y = Math.sin(x * 0.22 + p * 9) * amp * env * (0.35 + beat * 0.65);
         frame.set(Math.round(cx + x), Math.round(cy + y), y > 0 ? '#' : '=', Math.abs(y) > amp * 0.55, Math.abs(y) > amp * 0.55);
       }
       for (let x = -w; x <= w; x++) frame.set(Math.round(cx + x), cy, Math.abs(x) < 5 ? '+' : '-', dim);
       break;
     }
-    case 'molecule': {                                // 分子式骨架（营养 / 抗氧化物）
+    case 'walkaway': {                                  // YOU HAVE LEFT：背影一次次走远
+      const occ = Math.max(1, (LEAVE_OCC[VIS.idx] || 1));
+      const gy = cy + Math.round(Sy * 0.55);
+      for (let x = -S * 1.9; x <= S * 1.9; x++) frame.set(Math.round(cx + x), gy, '-', dim);
+      const gx = Math.round(cx - S * 0.5 + (occ - 1) * S * 0.42);
+      for (let i = 1; i <= occ * 3; i++) {               // 身后的脚印
+        const px = gx - i * 3;
+        if (px < cx - S * 1.8) break;
+        frame.set(Math.round(px), gy - 1, (i % 2) ? '.' : ',', dim);
+      }
+      const fade = clamp(1 - (occ - 1) * 0.16, 0.30, 1);  // 越走越淡
+      const c1 = mixRGB(hexToRgb(col), hexToRgb(dim), 1 - fade);
+      // 放大版背影：头 / 肩臂 / 躯干 / 双腿（块状，远看也认得出）
+      frame.fillRect(gx - 1, gy - 11, 3, 3, '#', c1);
+      frame.set(gx - 3, gy - 8, '/', c1); frame.set(gx - 2, gy - 8, '#', c1);
+      frame.set(gx, gy - 8, '#', c1);
+      frame.set(gx + 2, gy - 8, '#', c1); frame.set(gx + 3, gy - 8, '\\', c1);
+      frame.set(gx - 1, gy - 8, '#', c1); frame.set(gx + 1, gy - 8, '#', c1);
+      frame.set(gx, gy - 7, '#', c1);
+      frame.set(gx - 1, gy - 6, '/', c1); frame.set(gx, gy - 6, '#', c1); frame.set(gx + 1, gy - 6, '\\', c1);
+      frame.set(gx - 2, gy - 5, '/', c1); frame.set(gx + 2, gy - 5, '\\', c1);
+      frame.text(gx - 2, gy + 2, 'YOU', c1);
+      frame.text(Math.round(cx - S * 1.75), cy - Math.round(Sy * 0.85),
+        'PEER LOST  ·  DISTANCE ' + (occ * 12.4).toFixed(1) + ' km', col);
+      frame.rightText(Math.round(cx + S * 1.85), cy - Math.round(Sy * 0.85), 'LINK DOWN', dim);
+      break;
+    }
+    case 'fillbar': {                                   // 真正的进度条，随句子填满
+      const w = Math.round(S * 1.4), h = 3, x0 = cx - w, y0 = cy - 4;
+      const pct = clamp(p * 1.1, 0, 1);
+      for (let i = 0; i < w * 2; i++) { frame.set(x0 + i, y0, '=', dim); frame.set(x0 + i, y0 + h + 1, '=', dim); }
+      for (let j = 0; j <= h + 1; j++) { frame.set(x0, y0 + j, '|', dim); frame.set(x0 + w * 2 - 1, y0 + j, '|', dim); }
+      const on = Math.round(pct * (w * 2 - 2));
+      for (let j = 1; j <= h; j++) for (let i = 1; i <= on; i++) frame.set(x0 + i, y0 + j, '█', col, true);
+      for (let j = 1; j <= h; j++) for (let i = on + 1; i < w * 2 - 1; i++) frame.set(x0 + i, y0 + j, '░', dim);
+      for (let k = 0; k <= 10; k++) frame.set(x0 + 1 + Math.round(k * (w * 2 - 2) / 10), y0 + h + 2, '|', dim);
+      frame.centerText(y0 + h + 4, String(Math.round(pct * 100)).padStart(3, ' ') + ' %', bright, true);
+      break;
+    }
+    case 'code': {                                      // 控制台疯狂执行（EXECUTION 连唱段）
+      const CC = COL();                                 // drawFigure 里没有 C，配色要从 COL() 取
+      triggerShake(0.32);                               // 控制台一直在震（机器过载）
+      const H2 = L.mainBot - L.mainTop;
+      const rows2 = Math.max(6, Math.min(14, Math.floor((H2 - 10) / 2)));
+      const spin = Math.floor(stepT(14) * 24);            // 台阶式高速滚动
+      const x0c = L.cx0 + 3;
+      // 先把自己的区域擦干净：否则会跟场景的氛围底（内存转储/字符雨）叠成一团糊
+      for (let j = 0; j < rows2 * 2 + 4; j++) {
+        const yy = L.mainTop + j;
+        if (yy > L.mainBot) break;
+        for (let x = L.cx0; x <= L.cx1; x++) frame.erase(x, yy);
+      }
+      frame.text(x0c, L.mainTop + 1, '> EXECUTION QUEUE', CC.alert, true);
+      frame.rightText(L.cx1 - 3, L.mainTop + 1, 'PID 0x1A2B   LOAD ' + (90 + (spin % 10)) + '%', CC.mid);
+      for (let i = 0; i < rows2; i++) {
+        const idx = (spin + i) % CODE_LINES.length;
+        const y = L.mainTop + 4 + i * 2;
+        const hot = hash11(idx * 3.7 + spin * 0.31) > 0.60;
+        frame.text(x0c, y, '> ' + CODE_LINES[idx], hot ? CC.alert : CC.light, hot);
+        frame.rightText(L.cx1 - 3, y, hot ? '[KILL]' : '[ OK ]', hot ? CC.alert : CC.dark, hot);
+      }
+      break;
+    }
+    case 'web': {
+      const n = 10, pts = [];
+      for (let i = 0; i < n; i++) pts.push([cx + (hash11(i * 2.1) * 2 - 1) * S * 1.6, cy + (hash11(i * 5.3) * 2 - 1) * Sy * 0.95]);
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          const dx = pts[j][0] - pts[i][0], dy = pts[j][1] - pts[i][1];
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d > S * 1.1) continue;
+          const steps = Math.max(1, Math.round(d));
+          for (let s = 0; s <= steps * rev; s++) frame.set(Math.round(pts[i][0] + dx * s / steps), Math.round(pts[i][1] + dy * s / steps), '.', dim);
+        }
+      }
+      for (let i = 0; i < n; i++) if (i / n <= rev) frame.set(Math.round(pts[i][0]), Math.round(pts[i][1]), 'o', col, true);
+      break;
+    }
+    case 'molecule': {                                  // 分子式骨架（营养 / 抗氧化物）
       const rings = m.rings || 1;
       const R = S * 0.72, gap = R * 1.08;
       const x0 = cx - (rings - 1) * gap / 2;
@@ -1599,7 +1713,7 @@ function drawFigure(frame, m, p, col, dim, bright) {
           const a = (i / 6) * Math.PI * 2 - Math.PI / 6;
           vs.push([rx + Math.cos(a) * R, cy + Math.sin(a) * R * 0.62]);
         }
-        for (let i = 0; i < 6; i++) {                  // 六元环骨架
+        for (let i = 0; i < 6; i++) {
           const a = vs[i], b = vs[(i + 1) % 6];
           const steps = Math.max(2, Math.round(R * 1.5));
           for (let t = 0; t <= steps; t++) {
@@ -1607,7 +1721,7 @@ function drawFigure(frame, m, p, col, dim, bright) {
             frame.set(Math.round(a[0] + (b[0] - a[0]) * t / steps), Math.round(a[1] + (b[1] - a[1]) * t / steps), '#', col);
           }
         }
-        for (let i = 1; i < 6; i += 2) {                // 交替双键（往环心收一点的平行线）
+        for (let i = 1; i < 6; i += 2) {
           const a = vs[i], b = vs[(i + 1) % 6];
           const steps = Math.max(2, Math.round(R * 1.0));
           for (let t = 1; t < steps; t++) {
@@ -1617,15 +1731,13 @@ function drawFigure(frame, m, p, col, dim, bright) {
         }
         verts.push(vs);
       }
-      if (rev > 0.45) {                                 // 取代基 + 分子式
+      if (rev > 0.45) {
         for (let k = 0; k < rings; k++) {
           const vs = verts[k];
           frame.text(Math.round(vs[0][0]) + 1, Math.round(vs[0][1]) - 2, 'OH', col);
           frame.text(Math.round(vs[3][0]) - 3, Math.round(vs[3][1]) + 2, 'OH', col);
           if (k === rings - 1) frame.text(Math.round(vs[2][0]) + 2, Math.round(vs[2][1]) - 2, 'O', col);
         }
-        // 分子式紧贴环的下沿（再往下会撞到 label 行）
-        // 分子式放在图形下沿与 label 行之间（贴着 label 会被它的擦除带吃掉）
         if (m.formula) frame.centerText(Math.min(L.mainBot - 12, Math.round(cy + R * 0.62 + 3)), m.formula, bright, true);
       }
       break;
@@ -1643,7 +1755,7 @@ function drawFigure(frame, m, p, col, dim, bright) {
           const px = Math.round(a[0] + (b[0] - a[0]) * t / steps);
           const py = Math.round(a[1] + (b[1] - a[1]) * t / steps);
           frame.set(px, py, '#', col);
-          if (i % 2 === 0 && t > 1 && t < steps - 1) frame.set(px, py + (a[1] < cy ? -1 : 1), '=', dim);   // 双键
+          if (i % 2 === 0 && t > 1 && t < steps - 1) frame.set(px, py + (a[1] < cy ? -1 : 1), '=', dim);
         }
       }
       for (let i = 0; i <= n; i++) {
@@ -1664,21 +1776,6 @@ function drawFigure(frame, m, p, col, dim, bright) {
       frame.centerText(cy, '(x² + y² − 1)³  =  x²y³', bright, true);
       break;
     }
-    case 'web': {                                     // SIMULATION
-      const n = 10, pts = [];
-      for (let i = 0; i < n; i++) pts.push([cx + (hash11(i * 2.1) * 2 - 1) * S * 1.6, cy + (hash11(i * 5.3) * 2 - 1) * Sy * 0.95]);
-      for (let i = 0; i < n; i++) {
-        for (let j = i + 1; j < n; j++) {
-          const dx = pts[j][0] - pts[i][0], dy = pts[j][1] - pts[i][1];
-          const d = Math.sqrt(dx * dx + dy * dy);
-          if (d > S * 1.1) continue;
-          const steps = Math.max(1, Math.round(d));
-          for (let s = 0; s <= steps * rev; s++) frame.set(Math.round(pts[i][0] + dx * s / steps), Math.round(pts[i][1] + dy * s / steps), '.', dim);
-        }
-      }
-      for (let i = 0; i < n; i++) if (i / n <= rev) frame.set(Math.round(pts[i][0]), Math.round(pts[i][1]), 'o', col, true);
-      break;
-    }
     default: break;
   }
 }
@@ -1696,17 +1793,17 @@ function drawParticles(frame, kind, p, cx, cy) {
       x = cx + (h1 * 2 - 1) * S; y = cy + (h2 * 2 - 1) * Sy;
       ch = i % 8 === 0 ? '#' : (i % 3 === 0 ? '+' : '.'); col = i % 8 === 0 ? C.light : C.dark; glow = i % 8 === 0;
     } else if (kind === 'flow') {
-      const q = (h1 + FX.t * 0.22 * (0.5 + h2)) % 1;
+      const q = (h1 + p * (0.5 + h2)) % 1;
       x = cx + (q * 2 - 1) * S;
-      y = cy + (h2 * 2 - 1) * Sy + Math.sin(FX.t * 2 + i) * 1.5;
+      y = cy + (h2 * 2 - 1) * Sy + Math.sin(p * 6 + i) * 1.5;
       ch = q > 0.7 ? '@' : (q > 0.4 ? '%' : ':'); col = q > 0.7 ? C.bright : C.mid; glow = q > 0.7;
     } else if (kind === 'streak') {
-      const q = (h1 + FX.t * (0.5 + h2)) % 1;
+      const q = (h1 + p * (1.2 + h2)) % 1;
       x = cx + (q * 2 - 1) * S; y = cy + (h2 * 2 - 1) * Sy;
       frame.set(Math.round(x), Math.round(y), '-', C.dark);
       frame.set(Math.round(x - 2), Math.round(y), h3 > 0.6 ? '=' : '.', C.mid);
       continue;
-    } else {                                          // erase
+    } else {
       if (h3 < rev) continue;
       x = cx + (h1 * 2 - 1) * S; y = cy + (h2 * 2 - 1) * Sy;
       ch = '+'; col = C.dark;
@@ -1715,20 +1812,43 @@ function drawParticles(frame, kind, p, cx, cy) {
   }
 }
 
+/* ---------- 开场自检表：唱到哪一句就点亮哪一行 ---------- */
+const POST_ROWS = [
+  'POWER LINE ............ 12.0 V',
+  'PROTECTION ............ SEALED',
+  'PIECES ................ 16 / 16',
+  'OBJECT CREATION ....... DONE',
+  'DATA PARAMETERS ....... 65536',
+  'INITIALIZATION ........ OK',
+  'NEW WORLD ............. STABLE',
+  'SIMULATION ............ RUNNING',
+  'CALL .................. world.execute(me);'
+];
+
+/* ---------- EXECUTION 连唱时控制台刷的语句池 ---------- */
+const CODE_LINES = [
+  'exec(world, me);',
+  'for (n = 0; n < INF; n++)',
+  'kill(others.all);',
+  'while (true) run();',
+  'if (me.alone) break;',
+  'delete(us, them);',
+  'return love.toJSON();',
+  'await heartbeat(1);',
+  "throw new Error('gone');",
+  'self.execute(self);',
+  'mutex.lock(soul);',
+  'free(cache.memories);',
+  'assert(you != null);',
+  'syscall(9, SIGKILL);',
+  'gc.collect(me);'
+];
+
 /* ---------- 规则表：正则 → 视觉描述（顺序敏感，先匹配先用）---------- */
 const MOTIF_RULES = [
-  [/power line/i,          { k: 'art', a: 'plug', label: 'SWITCH ON THE POWER LINE', sub: 'power = ON' }],
-  [/safety belt|put on/i,  { k: 'art', a: 'belt', label: 'REMEMBER TO PUT ON', sub: 'SAFETY BELT' }],
-  [/protection/i,          { k: 'text', s: 'PROTECT', xs: 2, ys: 2, label: 'PROTECTION', sub: 'ARMOR ENGAGED' }],
-  [/lay down your pieces/i,{ k: 'part', f: 'scatter', label: 'LAY DOWN YOUR PIECES', sub: 'one file, one piece' }],
-  [/let's begin/i,         { k: 'art', a: 'star', label: "AND LET'S BEGIN", sub: 'READY' }],
-  [/object creation/i,     { k: 'art', a: 'book', label: 'OBJECT CREATION', sub: 'new Object()' }],
-  [/data parameters/i,     { k: 'art', a: 'progress', label: 'FILL IN MY DATA PARAMETERS', sub: 'param[0..n]' }],
-  [/initialization/i,      { k: 'text', s: 'INIT', xs: 3, ys: 3, label: 'INITIALIZATION', sub: 'allocating self' }],
-  [/new world/i,           { k: 'math', f: 'globe', label: 'SET UP OUR NEW WORLD', sub: 'world := { }' }],
-  [/simulation/i,          { k: 'math', f: 'web', label: 'SIMULATION', sub: 'while (alive) step()' }],
-  [/world\.execute/i,      { k: 'text', s: 'EXECUTE', xs: 2, ys: 2, label: 'world.execute(me);', sub: 'CALL ACCEPTED' }],
-  // —— if I'm a ... then I will give you my ... ——
+  // INTRO 不在这里规则化：整段由 buildLyrics 按"行号 → 自检表"映射（见 INTRO 覆盖），
+  // 否则 /simulation/ 这类规则会把 73 秒那句 SIMULATION 也一并抓走。
+  // VERSE 1
   [/set of points/i,       { k: 'math', f: 'points', label: "IF I'M A SET OF POINTS", sub: 'P = { p1, p2, ... pn }' }],
   [/dimension/i,           { k: 'math', f: 'axes3d', label: 'DIMENSION', sub: 'x, y, z  =  3' }],
   [/i'm a circle/i,        { k: 'math', f: 'circle', label: "IF I'M A CIRCLE", sub: 'x² + y² = r²' }],
@@ -1737,20 +1857,24 @@ const MOTIF_RULES = [
   [/tangents/i,            { k: 'math', f: 'tangent', label: 'TANGENTS', sub: "y' = cos(x)" }],
   [/approach infinity/i,   { k: 'math', f: 'infinity', label: 'IF I APPROACH INFINITY', sub: 'n → INF' }],
   [/limitations/i,         { k: 'math', f: 'limit', label: 'LIMITATIONS', sub: 'lim  f(x),  x → 0' }],
+  // VERSE 2
   [/switch my current/i,   { k: 'math', f: 'ac', label: 'SWITCH MY CURRENT', sub: 'AC  ~' }],
   [/to ac to dc/i,         { k: 'math', f: 'dc', label: 'TO AC TO DC', sub: 'rectified' }],
   [/blind my vision/i,     { k: 'art', a: 'blinds', label: 'AND THEN BLIND MY VISION', sub: 'vision = null' }],
-  [/so dizzy/i,            { k: 'math', f: 'spiral', label: 'SO DIZZY SO DIZZY', sub: 'spin spin spin' }],
+  [/so dizzy/i,            { k: 'math', f: 'spiral', label: 'SO DIZZY SO DIZZY', sub: 'spin' }],
   [/we can travel/i,       { k: 'part', f: 'streak', label: 'OH WE CAN TRAVEL', sub: 'warp' }],
   [/to a\.d to b\.c/i,     { k: 'math', f: 'timeline', label: 'TO A.D TO B.C', sub: 'time.reverse()' }],
   [/we can unite/i,        { k: 'math', f: 'merge', label: 'AND WE CAN UNITE', sub: 'A + B = AB' }],
   [/so deeply/i,           { k: 'math', f: 'rings', label: 'SO DEEPLY SO DEEPLY', sub: 'depth++' }],
+  // CHORUS
   [/stimulations/i,        { k: 'math', f: 'scope', label: 'STIMULATIONS', sub: 'amplitude x MAX' }],
-  [/satisfaction/i,        { k: 'art', a: 'progress', label: 'SATISFACTION', sub: '[##########] 100%' }],
+  [/satisfaction/i,        { k: 'math', f: 'fillbar', label: 'SATISFACTION', sub: 'scale = MAX' }],
   [/make you happy/i,      { k: 'art', a: 'heart', label: 'IF I CAN MAKE YOU HAPPY', sub: 'mood = MAX' }],
   [/run the/i,             { k: 'text', s: 'RUN', xs: 3, ys: 3, label: 'I WILL RUN THE', sub: 'spawning...' }],
   [/trapped/i,             { k: 'art', a: 'cage', label: 'THOUGH WE ARE TRAPPED', sub: 'no exit' }],
   [/strange/i,             { k: 'math', f: 'web', label: 'IN THIS STRANGE STRANGE', sub: 'world is odd' }],
+  [/^simulation$/i,        { k: 'math', f: 'web', label: 'SIMULATION', sub: 'while (alive) step()' }],
+  // VERSE 3
   [/eggplant/i,            { k: 'art', a: 'egg', label: "IF I'M AN EGGPLANT", sub: 'botany.load()' }],
   [/nutrients/i,           { k: 'math', f: 'molecule', rings: 1, formula: 'C6H8O6   VITAMIN C', label: 'NUTRIENTS', sub: 'give(you)' }],
   [/tomato/i,              { k: 'art', a: 'tomato', label: "IF I'M A TOMATO", sub: 'botany.load()' }],
@@ -1761,6 +1885,7 @@ const MOTIF_RULES = [
   [/only god/i,            { k: 'art', a: 'sun', label: "IF I'M THE ONLY GOD", sub: 'genesis' }],
   [/proof of my/i,         { k: 'art', a: 'eye', label: "YOU'RE THE PROOF OF MY", sub: 'observed = true' }],
   [/existence/i,           { k: 'art', a: 'dot', label: 'EXISTENCE', sub: 'I AM' }],
+  // VERSE 4
   [/switch my gender/i,    { k: 'art', a: 'gender', label: 'SWITCH MY GENDER', sub: 'F <-> M' }],
   [/to f to m/i,           { k: 'art', a: 'gender', label: 'TO F TO M', sub: 'F <-> M' }],
   [/do whatever/i,         { k: 'part', f: 'scatter', label: 'AND THEN DO WHATEVER', sub: 'no rules' }],
@@ -1769,30 +1894,32 @@ const MOTIF_RULES = [
   [/to s to m/i,           { k: 'art', a: 'role', label: 'TO S TO M', sub: 'S <-> M' }],
   [/we can enter/i,        { k: 'math', f: 'spiral', label: 'SO WE CAN ENTER', sub: 'entering...' }],
   [/the trance/i,          { k: 'math', f: 'spiral', label: 'THE TRANCE THE TRANCE', sub: 'hypnosis' }],
+  // VERSE 5-6：从这里开始画面逐步崩坏
   [/feel your/i,           { k: 'math', f: 'scope', label: 'IF I CAN FEEL YOUR', sub: 'sensing...' }],
   [/vibrations/i,          { k: 'math', f: 'scope', label: 'VIBRATIONS', sub: 'f = 1 / T' }],
-  [/finally be/i,          { k: 'art', a: 'progress', label: 'THEN I CAN FINALLY BE', sub: 'almost...' }],
-  [/completion/i,          { k: 'text', s: 'COMPLETE', xs: 2, ys: 2, label: 'COMPLETION', sub: '[##########] 100%' }],
-  [/you have left/i,       { k: 'art', a: 'walk', label: 'THOUGH YOU HAVE LEFT', sub: 'distance++' }],
-  [/left me in/i,          { k: 'art', a: 'walk', label: 'YOU HAVE LEFT ME IN', sub: 'distance++' }],
+  [/finally be/i,          { k: 'math', f: 'fillbar', label: 'THEN I CAN FINALLY BE', sub: 'almost...' }],
+  [/completion/i,          { k: 'text', s: 'COMPLETE', xs: 2, ys: 2, label: 'COMPLETION', sub: 'scale 100%' }],
+  [/you have left/i,       { k: 'math', f: 'walkaway', label: 'YOU HAVE LEFT', sub: 'peer lost' }],
+  [/left me in/i,          { k: 'math', f: 'walkaway', label: 'YOU HAVE LEFT ME IN', sub: 'peer lost' }],
   [/isolation/i,           { k: 'art', a: 'dot', label: 'ISOLATION', sub: 'peers = 0' }],
   [/erase all the pointless/i, { k: 'part', f: 'erase', label: 'ERASE ALL THE POINTLESS', sub: 'rm -rf' }],
   [/fragments/i,           { k: 'part', f: 'erase', label: 'FRAGMENTS', sub: 'deleting...' }],
   [/then maybe/i,          { k: 'part', f: 'erase', label: 'THEN MAYBE', sub: 'maybe...' }],
   [/disheartened/i,        { k: 'art', a: 'crack', label: 'DISHEARTENED', sub: 'heart.status = BROKEN' }],
   [/challenging your god/i,{ k: 'art', a: 'beam', label: 'CHALLENGING YOUR GOD', sub: 'permission denied' }],
-  [/made some/i,           { k: 'art', a: 'error', label: 'YOU HAVE MADE SOME', sub: 'syntax error' }],
-  [/illegal arguments/i,   { k: 'art', a: 'error', label: 'ILLEGAL ARGUMENTS', sub: 'ERR 0x1A2B' }],
-  [/^execution$/i,         { k: 'text', s: 'EXECUTE', xs: 3, ys: 3, alert: true, label: 'EXECUTION', sub: 'irreversible' }],
-  [/^ein$/i,               { k: 'text', s: '1', xs: 5, ys: 5, alert: true, label: 'EIN', sub: 'countdown' }],
-  [/^dos$/i,               { k: 'text', s: '2', xs: 5, ys: 5, alert: true, label: 'DOS', sub: 'countdown' }],
-  [/^trois$/i,             { k: 'text', s: '3', xs: 5, ys: 5, alert: true, label: 'TROIS', sub: 'countdown' }],
-  [/ne fem/i,              { k: 'text', s: '45', xs: 4, ys: 4, alert: true, label: 'NE FEM', sub: 'countdown' }],
-  [/^liu$/i,               { k: 'text', s: '6', xs: 5, ys: 5, alert: true, label: 'LIU', sub: 'countdown' }],
+  [/made some/i,           { k: 'redbig', s: 'ERROR', boom: 0.5, label: 'YOU HAVE MADE SOME', sub: 'raising exception' }],
+  [/illegal arguments/i,   { k: 'redbig', s: 'ILLEGAL', boom: 0.8, label: 'ILLEGAL ARGUMENTS', sub: 'EXCEPTION 0x1A2B' }],
+  // BRIDGE / CHORUS / OUTRO
+  [/^execution$/i,         { k: 'math', f: 'code', boom: 0.55, label: 'EXECUTION', sub: 'no return path' }],
+  [/^ein$/i,               { k: 'text', s: '1', xs: 5, ys: 5, alert: true, boom: 0.7, label: 'EIN', sub: 'countdown' }],
+  [/^dos$/i,               { k: 'text', s: '2', xs: 5, ys: 5, alert: true, boom: 0.7, label: 'DOS', sub: 'countdown' }],
+  [/^trois$/i,             { k: 'text', s: '3', xs: 5, ys: 5, alert: true, boom: 0.7, label: 'TROIS', sub: 'countdown' }],
+  [/ne fem/i,              { k: 'text', s: '4', s2: '5', xs: 5, ys: 5, alert: true, boom: 0.7, label: 'QUATRE  ·  CINQ', sub: 'countdown' }],
+  [/^liu$/i,               { k: 'text', s: '6', xs: 5, ys: 5, alert: true, boom: 0.7, label: 'LIU', sub: 'countdown' }],
   [/^if i can$/i,          { k: 'text', s: 'IF', xs: 4, ys: 4, label: 'IF I CAN', sub: 'condition...' }],
   [/give you all the|give them all the/i, { k: 'part', f: 'flow', label: 'GIVE YOU ALL THE', sub: 'yield everything' }],
   [/be your only/i,        { k: 'art', a: 'heart', label: 'BE YOUR ONLY', sub: 'exclusive = true' }],
-  [/have you back/i,       { k: 'art', a: 'walk', label: 'IF I CAN HAVE YOU BACK', sub: 'return;' }],
+  [/have you back/i,       { k: 'math', f: 'walkaway', label: 'IF I CAN HAVE YOU BACK', sub: 'return;' }],
   [/i've studied/i,        { k: 'art', a: 'book', label: "I'VE STUDIED", sub: 'how to properly...' }],
   [/lo-o-ove/i,            { k: 'text', s: 'LO-O-OVE', xs: 2, ys: 2, label: 'LO-O-OVE', sub: 'love := ♥' }],
   [/question me/i,         { k: 'art', a: 'question', label: 'QUESTION ME', sub: 'ready for input' }],
@@ -1809,7 +1936,10 @@ function motifFor(line) {
   return null;
 }
 
-/* 每帧更新：当前歌词 + 行内进度（没匹配到规则时 VIS.m = null，场景走自己的子阶段） */
+/* 长间奏（前奏与主歌之间的 13 秒）用标题卡顶上 */
+const MOTIF_TITLE = { k: 'title' };
+
+/* 每帧更新：当前歌词 + 行内进度 */
 function updateLyricVis(t, total) {
   VIS.m = null; VIS.idx = -1; VIS.p = 0; VIS.line = null;
   const lyr = CONFIG.lyrics;
@@ -1821,36 +1951,87 @@ function updateLyricVis(t, total) {
   VIS.idx = i;
   VIS.line = lyr[i];
   const next = lyr[i + 1];
-  // 行内进度：分母必须是"这一句的时长"（归一化后的值），
-  // 下限按秒换算（0.5 秒），千万不能写 0.30 —— 那是 63 秒，图形会永远停在开头几像素
+  // 行内进度：分母必须是"这一句的时长"（归一化后的值），下限按秒换算（0.5 秒）
   const span = next ? Math.max(0.5 / total, next.t - lyr[i].t) : 0.06;
   VIS.p = clamp((norm - lyr[i].t) / span, 0, 1);
   VIS.m = MOTIF_BY_INDEX[i] || null;
-  // 最后一句唱完 3 秒后交还画面（让 LOVE 终章自己收尾）
+  if (i !== VIS.lastIdx) {                       // 换句瞬间：带 boom 的句子给一记重击
+    VIS.lastIdx = i;
+    if (VIS.m && VIS.m.boom) { triggerShake(VIS.m.boom); triggerFlash(0.10); }
+  }
   if (!next && (t - lyr[i].sec) > 3) VIS.m = null;
+  // 前奏那 13 秒的长间奏：亮标题卡（作者在前，不突出 execute）
+  if (next && t < 30 && (next.t - lyr[i].t) * total > 6 && (t - lyr[i].sec) > 3.5) VIS.m = MOTIF_TITLE;
 }
 
 /* 把歌词对应的主体视觉画到画面中央 */
 function drawMotif(frame, m, p) {
   const L = getL(), C = COL();
+  const H = L.mainBot - L.mainTop;
   const cx = Math.round((L.cx0 + L.cx1) / 2);
-  const cy = L.mainTop + 19;
-  // EXECUTION 的 12 连唱：白与红高频交替 —— "执行"与"处决"的双关
-  const col = m.alert ? ((((FX.t * 2.6) % 1) < 0.45) ? C.alert : C.pure) : C.bright;
+  // 图形位置随主内容区高度自适应（换网格尺寸也不会撞到标签行）
+  const cy = L.mainTop + Math.round(H * 0.40);       // 图形位置固定，不做上下跳动
+  const labelY = L.mainBot - Math.round(H * 0.16);
+  const subY = labelY + 2;
+  const col = m.alert ? ((((stepT(12) * 2.6) % 1) < 0.45) ? C.alert : C.pure) : C.bright;
+
   if (m.k === 'art') stampArt(frame, m.a, cx, cy, col, true, 2);
   else if (m.k === 'math') drawFigure(frame, m, p, col, C.dark, C.pure);
-  else if (m.k === 'text') drawBig(frame, m.s, cx, cy, m.xs || 2, m.ys || 2, col, true);
+  else if (m.k === 'text') {
+    // s2 存在时按句内进度换字（"NE FEM" = quatre + cinq，4 和 5 分开显示）
+    const glyph = (m.s2 && p >= 0.5) ? m.s2 : m.s;
+    drawBig(frame, glyph, cx, cy, m.xs || 2, m.ys || 2, col, true);
+  }
   else if (m.k === 'part') drawParticles(frame, m.f, p, cx, cy);
-  // 标签行先擦一遍再写：否则标签里的空格会漏出底下的字符雨，读起来像乱码
+  else if (m.k === 'post') {
+    // 开场：系统自检，唱一句点亮一行
+    // 自检表整体左对齐（POST 屏的观感），不用居中
+    const top = L.mainTop + Math.round(H * 0.10);
+    const x0 = L.cx0 + 4;
+    frame.text(x0, top, 'ME SYSTEM SELF TEST', C.pure, true);
+    frame.text(x0, top + 1, 'POST / SELF TEST v2.1.4', C.deep);
+    for (let i = 0; i < POST_ROWS.length; i++) {
+      if (i > m.row) break;
+      const cur = (i === m.row);
+      const k = cur ? clamp(p / 0.5, 0, 1) : 1;
+      const txt = POST_ROWS[i];
+      const shown = txt.slice(0, Math.max(1, Math.round(k * txt.length)));
+      const y = top + 3 + i * 2;
+      frame.text(x0, y, (cur && k < 1) ? '[..]' : '[OK]', (cur && k < 1) ? C.mid : C.light, !cur || k >= 1);
+      frame.text(x0 + 5, y, shown, cur ? C.bright : C.mid, cur);
+      if (cur && k < 1 && (FX.t * 4) % 1 < 0.6) frame.set(x0 + 5 + strW(shown), y, '█', C.pure, true);
+    }
+    const frac = (m.row + clamp(p / 0.5, 0, 1)) / POST_ROWS.length;
+    const cells = 30, on = Math.round(frac * cells);
+    frame.text(x0, L.mainBot - 3, '[' + '█'.repeat(on) + '░'.repeat(cells - on) + ']  ' +
+      String(Math.round(frac * 100)).padStart(3, ' ') + '%', C.light);
+  } else if (m.k === 'redbig') {
+    // 非法参数：不做位移抖动（很难看），改成红字高频闪烁 + 整屏红闪
+    const on = (Math.floor(FX.t * 9) % 2) === 0;
+    triggerShake(0.62);                                 // 大红字期间整屏持续震动
+    drawBig(frame, m.s || 'ILLEGAL', cx, cy - 2, 3, 3, on ? C.alert : C.pure, true);
+    drawBig(frame, 'ARGUMENTS', cx, cy + 12, 2, 2, on ? C.alert : C.dark, true);
+    if (FX.tintAlpha < 0.12) triggerTint(C.alert, on ? 0.20 : 0.05);
+  } else if (m.k === 'title') {
+    // 标题卡：标题占大头，歌手与专辑次之
+    const y0 = L.mainTop + Math.round(H * 0.18);
+    // ys=1：5x5 点阵在 ys=2 下会被拉成 3:10 的细长条，ys=1 才是正常比例
+    drawBig(frame, 'WORLD.EXECUTE(ME);', cx, y0 + 4, 1, 1, C.pure, true);
+    frame.centerText(y0 + 14, '- - - - - - - - - - - - - -', C.deep);
+    frame.centerText(y0 + 17, 'M  I  L  I', C.bright, true);
+    frame.centerText(y0 + 20, 'MIRACLE MILK   ·   2016', C.mid);
+    frame.centerText(y0 + 22, 'LYRICS & VOCAL : MOMOCASHEW', C.dark);
+  }
+
   if (m.label) {
     const w = strW(m.label) + 4, x0 = Math.floor((L.C - w) / 2);
-    for (let i = 0; i < w; i++) frame.erase(x0 + i, L.mainBot - 9);
-    frame.centerText(L.mainBot - 9, m.label, C.bright, true);
+    for (let i = 0; i < w; i++) frame.erase(x0 + i, labelY);
+    frame.centerText(labelY, m.label, C.bright, true);
   }
   if (m.sub) {
     const w = strW(m.sub) + 4, x0 = Math.floor((L.C - w) / 2);
-    for (let i = 0; i < w; i++) frame.erase(x0 + i, L.mainBot - 7);
-    frame.centerText(L.mainBot - 7, m.sub, C.mid);
+    for (let i = 0; i < w; i++) frame.erase(x0 + i, subY);
+    frame.centerText(subY, m.sub, C.mid);
   }
 }
 
@@ -1911,7 +2092,7 @@ function scene_creation(norm, frame) {
 
   // —— 子阶段 3（0.55-0.80）内存测试 + 十六进制转储加速滚动 + POST 清单 ——
   const s3 = seg(u, 0.55, 0.80);
-  if (u >= 0.55) {
+  if (u >= 0.55 && !VIS.m) {
     const memK = clamp((u - 0.55) / 0.22, 0, 1);
     const x0 = L.cx0 + 6;
     const y2 = L.mainTop + 7 + BIOS_LINES.length * 2;
@@ -2095,8 +2276,9 @@ function scene_execution(norm, frame) {
   else if (s3 >= 0) speed = 1.7 + s3 * 0.9;
   else if (s4 >= 0) speed = 0.7;
   else speed = 0.3;
-  // 叙事节奏：过了 "Though you have left" 雨变密变快，并开始夹杂红色碎片
+  // 叙事节奏：过了 "Though you have left"，每唱一句系统就烂得更彻底
   const grief = (GRIEF_IDX >= 0 && VIS.idx >= GRIEF_IDX) ? 1 : 0;
+  const chaos = (GRIEF_IDX >= 0 && VIS.idx >= GRIEF_IDX) ? clamp((VIS.idx - GRIEF_IDX + 1) / 5, 0, 1) : 0;
   speed *= (1 + grief * 0.6);
   const tq = Math.floor(u * 60 * speed);
   if (!(s5 >= 0 && s5 > 0.30)) {
@@ -2148,6 +2330,24 @@ function scene_execution(norm, frame) {
       }
       if ((u * sceneSeconds('EXECUTION') % 1.5) < 0.13) triggerTint(C.alert, 0.18);
     }
+  }
+
+  // —— 递增混乱：行了位移 + 随机乱码 + 整屏震动，越到后面越烂 ——
+  if (chaos > 0.05) {
+    triggerShake(0.16 + chaos * 0.45);
+    for (let y = L.mainTop; y <= L.mainBot; y++) {
+      if (hash11(y * 3.1 + Math.floor(FX.t * 6) * 0.21) < chaos * 0.45) {
+        shiftRow(frame, y, Math.round((hash11(y * 7.7 + FX.t) - 0.5) * 26 * chaos));
+      }
+    }
+    const junk = Math.round(240 * chaos);
+    for (let i = 0; i < junk; i++) {
+      const x = L.cx0 + Math.floor(hash11(i * 1.31 + Math.floor(FX.t * 9) * 0.17) * (L.cx1 - L.cx0));
+      const y = L.mainTop + Math.floor(hash11(i * 2.71 + Math.floor(FX.t * 9) * 0.13) * (L.mainBot - L.mainTop));
+      frame.set(x, y, RAIN_POOL[Math.floor(hash11(i * 5.7) * RAIN_POOL.length)],
+        chaos > 0.6 ? C.alert : C.light, chaos > 0.6);
+    }
+    if (chaos > 0.75 && FX.tintAlpha < 0.08) triggerTint(C.alert, 0.10 * chaos);
   }
 
   // —— 子阶段 4：碎片化（字符块随机位移 + 数据崩溃）——
@@ -2245,6 +2445,7 @@ function scene_release(norm, frame) {
       for (let g = -gap; g <= gap; g++) frame.erase(x, mid + g + off);
       frame.set(x, mid + off, hash11(x * 7.7 + FX.t * 2) > 0.5 ? '▄' : '▀', C.alert, true);
     }
+    if ((u * sceneSeconds('RELEASE') % 1.2) < 0.07) triggerShake(0.34);   // 裂缝每隔 1.2 秒"咚"一下
     const words = ['RELEASE ME', 'DELETE ALL', 'WHO AM I', 'CONNECTION LOST'];
     const wi = Math.floor(u * sceneSeconds('RELEASE') / 0.9) % words.length;
     if (!VIS.m && (FX.t * 1.6) % 1 < 0.82) {
@@ -2286,6 +2487,7 @@ function scene_love(norm, frame) {
 
   // 心跳：相位仍然来自 audio.currentTime（不是独立计时器）
   const beatPh = 1 - ((AUDIO.time * BEAT_BPM / 60) % 1);
+  if ((s3 >= 0 || s4 >= 0) && beatPh > 0.93) triggerShake(s4 >= 0 ? 0.26 : 0.16);   // 心跳带动整屏
   const pulseAmt = s4 >= 0 ? 0.085 : (s5 >= 0 ? 0.03 : 0.02);
   const pulse = 1 + pulseAmt * Math.pow(beatPh, 3);
   // 子阶段 4 脉动段辉光最高；LOVE 全场比其他场景更亮
@@ -2608,12 +2810,20 @@ class StyleSelector {
     // 描述
     const p = this.current();
     frame.centerText(py + ph + 3, p.description, C.mid);
-    frame.centerText(py + ph + 5, p.descriptionCN, C.light);
+
+    // 音频来源状态框：让"换音频"这件事看得见（按 M 或直接点它）
+    const aw = Math.min(112, L.C - 30), ax = Math.floor((L.C - aw) / 2), ay = py + ph + 7;
+    frame.box(ax, ay, aw, 4, C.mid, 'AUDIO SOURCE', C.bright);
+    frame.text(ax + aw - 12, ay, '[M] CHANGE', C.light);
+    const cur = String(SRC.name || AUDIO_CANDIDATES[0] || 'music.mp3');
+    frame.text(ax + 3, ay + 2, ('SOURCE  ' + cur).slice(0, aw - 20), C.light);
+    frame.rightText(ax + aw - 3, ay + 2, AUDIO.duration > 0 ? fmtTime(AUDIO.duration) : '--:--.-', C.mid);
+    this.audioBox = { x: ax, y: ay, w: aw, h: 4 };
 
     // 操作提示
-    frame.centerText(L.R - 6, '[↑↓] NAVIGATE    [ENTER] CONFIRM    [1-6] QUICK PICK' +
+    frame.centerText(L.R - 6, '[↑↓] NAVIGATE   [ENTER] CONFIRM   [1-6] QUICK PICK   [M] OPEN AUDIO PANEL' +
       (ENABLE_DEV_MODE ? '    [D] DEV MODE' : ''), C.bright);
-    frame.centerText(L.R - 4, 'THE STYLE IS SAVED TO LOCALSTORAGE  //  KEY: ' + STYLE_KEY, C.deep);
+    frame.centerText(L.R - 4, 'SET UP THE TERMINAL BEFORE YOU WAKE HER', C.deep);
 
     // 背景数据雨（只填下半屏，营造"终端待机"的呼吸感）
     for (let x = 2; x < L.C - 2; x++) {
@@ -2772,6 +2982,19 @@ function buildLyrics(d) {
   rebuildSceneKeys(d);   // 歌词源定了，场景边界跟着一起重建（两边必须同源）
   // 歌词视觉层：按行预先匹配好视觉描述，运行期零正则
   MOTIF_BY_INDEX = CONFIG.lyrics.map(function (l) { return motifFor(l); });
+  // 开场（第一句主歌 "If I'm a set of points" 之前）整段走系统自检：
+  // 按行号映射到自检表，而不是靠正则 —— 正则会把后面同名的歌词一起抓走
+  let introEnd = -1;
+  for (let i = 0; i < CONFIG.lyrics.length; i++) {
+    if (/set of points/i.test(CONFIG.lyrics[i].en)) { introEnd = i; break; }
+  }
+  if (introEnd < 0) introEnd = 12;
+  for (let i = 0; i < introEnd; i++) {
+    MOTIF_BY_INDEX[i] = {
+      k: 'post',
+      row: Math.min(POST_ROWS.length - 1, Math.round(i * (POST_ROWS.length - 1) / Math.max(1, introEnd - 1)))
+    };
+  }
   // 桥句（"Then I will give you my" 这类本身没有图形）直接继承下一句的视觉，
   // 这样画面是提前成形，而不是退回通用场景动画
   for (let i = MOTIF_BY_INDEX.length - 2; i >= 0; i--) {
@@ -2780,9 +3003,11 @@ function buildLyrics(d) {
   // 叙事拐点：官方歌词里 "Though you have left" 之后情绪急转直下，
   // 之后的画面要明显比前半段更破、更乱（见 scene_execution 的 grief）
   GRIEF_IDX = -1;
-  for (let i = 0; i < CONFIG.lyrics.length; i++) {
-    if (/you have left/i.test(CONFIG.lyrics[i].en)) { GRIEF_IDX = i; break; }
-  }
+  let occ = 0;
+  LEAVE_OCC = CONFIG.lyrics.map(function (l) {
+    if (/you have left/i.test(l.en)) { if (GRIEF_IDX < 0) GRIEF_IDX = CONFIG.lyrics.indexOf(l); occ++; }
+    return occ;
+  });
 }
 
 function loadSource(i) {
@@ -3198,8 +3423,9 @@ function renderErrorStage() {
   f.centerText(8, '> ERROR: music.mp3 NOT FOUND.', C.alert, true);
   f.centerText(11, '> PLACE music.mp3 IN THE SAME FOLDER AND REFRESH.', C.bright);
   f.centerText(15, 'CANDIDATES TRIED: ' + AUDIO_CANDIDATES.join('  '), C.dark);
-  f.centerText(20, '[ OR DROP AN AUDIO FILE ONTO THIS WINDOW ]', C.mid);
+  f.centerText(20, '[ M ] CHOOSE ANOTHER SOURCE  ·  OR DROP AN AUDIO FILE HERE', C.mid);
   f.centerText(L.R - 6, 'world.execute(me);  //  SELF SYSTEM FAILED TO WAKE', C.dark);
+  if (SRC.open) renderSrcPanel(f);          // ERROR 阶段也能换音频来源
   present(f);
 }
 function renderEndStage() {
@@ -3260,6 +3486,7 @@ function loop(now) {
       const f = FRAME;
       f.clear();
       styleSelector.render(f);
+      if (SRC.open) renderSrcPanel(f);       // 音频来源面板叠在风格页上
       present(f);
       break;
     }
@@ -3295,6 +3522,7 @@ function startMV() {
   try { if (typeof audioEl.currentTime === 'number') audioEl.currentTime = 0; } catch (e) { /* 忽略 */ }
   AUDIO.blocked = false;
   safePlay();
+  triggerShake(0.85);                      // 开场一记重击
   audioStartTime = -1;                     // 下一帧用真实 currentTime 取基准
   // 若浏览器仍然拦截（没有用户手势），主循环里会显示 CLICK TO SYNC
   try { setTimeout(function () { if (STAGE === 'MV' && AUDIO.paused) AUDIO.blocked = true; }, 800); } catch (e) { /* 忽略 */ }
@@ -3314,6 +3542,9 @@ function gridFromEvent(e) {
 function onKeyDown(e) {
   const k = e.key;
   unlockAudio();
+  // 音频来源面板打开时独占按键
+  if ((STAGE === 'STYLE' || STAGE === 'ERROR') && SRC.open) { if (srcKey(e)) { e.preventDefault(); return; } }
+  if ((k === 'm' || k === 'M') && (STAGE === 'STYLE' || STAGE === 'ERROR')) { srcOpen(!SRC.open); e.preventDefault(); return; }
   if (ENABLE_DEV_MODE && devMode.visible) { if (devPanel.handleKey(e)) { e.preventDefault(); return; } }
   if (k === 'd' || k === 'D') {
     // 开场对话阶段（还没输入 hello）按 D 不生效；读取/过渡阶段同样忽略
@@ -3360,6 +3591,20 @@ function bindEvents() {
     if (STAGE === 'MV' && AUDIO.blocked) { AUDIO.blocked = false; safePlay(); return; }
     if (STAGE !== 'STYLE') return;
     const g = gridFromEvent(e);
+    const ab = styleSelector.audioBox;
+    if (ab && g.y >= ab.y && g.y < ab.y + ab.h && g.x >= ab.x && g.x < ab.x + ab.w) {
+      srcOpen(true);                          // 点 AUDIO SOURCE 框直接开面板
+      return;
+    }
+    if (SRC.open) {                          // 面板打开时，点击落到面板行上
+      for (let i = 0; i < 3; i++) {
+        if (g.y === SRC.box.y + 4 + i * 2 && g.x > SRC.box.x && g.x < SRC.box.x + SRC.box.w) {
+          SRC.sel = i; srcActivate();          // 面板里只有三个选项，单击直接执行
+          return;
+        }
+      }
+      return;
+    }
     styleSelector.pointer(g.x, g.y, true);
   });
   window.addEventListener('dragover', function (e) { e.preventDefault(); });
@@ -3369,9 +3614,8 @@ function bindEvents() {
     if (!files || !files.length) return;
     if (typeof URL === 'undefined' || !URL.createObjectURL) return;   // file:// 下大部分浏览器仍可用
     try {
-      audioEl.src = URL.createObjectURL(files[0]);
-      AUDIO.ok = false; AUDIO.failed = false; AUDIO.duration = 0;
-      if (typeof audioEl.load === 'function') audioEl.load();
+      srcApplyUrl(URL.createObjectURL(files[0]), 'file', files[0].name);
+      SRC.note = 'DROPPED FILE LOADED';
       if (STAGE === 'ERROR') enterStage('STYLE');
     } catch (er) { /* 忽略 */ }
   });
@@ -3383,7 +3627,106 @@ function bindEvents() {
   inputEl.addEventListener('input', function () {
     inputEl.style.color = CONFIG.colors.bright || '#ffffff';
   });
+  urlInputEl.addEventListener('keydown', function (e) {
+    e.stopPropagation();
+    if (e.key === 'Escape') { urlInputEl.style.display = 'none'; return; }
+    if (e.key !== 'Enter') return;
+    const u = String(urlInputEl.value || '').trim();
+    if (!u) { SRC.note = 'EMPTY ADDRESS'; return; }
+    srcApplyUrl(u, 'url', u.replace(/^.*\//, ''));
+    try { localStorage.setItem(SRC_KEY, u); } catch (er) { /* 忽略 */ }
+    urlInputEl.style.display = 'none';
+    e.preventDefault();
+  });
+  fileInputEl.addEventListener('change', function () {
+    const f = fileInputEl.files && fileInputEl.files[0];
+    if (!f) return;
+    if (typeof URL === 'undefined' || !URL.createObjectURL) { SRC.note = 'BLOB URL UNSUPPORTED'; return; }
+    srcApplyUrl(URL.createObjectURL(f), 'file', f.name);
+    SRC.note = 'LOCAL FILE LOADED';
+  });
 }
+
+/* ---------------------------------------------------------------------------
+   [16.5] 音频来源面板（风格选择页里按 M 唤出）
+   三种来源：内置文件（music.mp3 → music.flac → …）、本地文件上传、直接填网址。
+   面板本身用字符网格画，只有"填网址"时才浮出一个 HTML 输入框，样式与对话输入框一致。
+   --------------------------------------------------------------------------- */
+const AUDIO_DEFAULT_CANDIDATES = AUDIO_CANDIDATES.slice();
+const SRC_KEY = 'world_execute_me_audio_url';
+const SRC = { open: false, sel: 0, mode: 'local', name: '', note: '', box: { x: 0, y: 0, w: 0, h: 0 } };
+
+function srcOpen(on) {
+  SRC.open = !!on;
+  if (!SRC.open) { urlInputEl.style.display = 'none'; }
+  else { SRC.sel = 0; SRC.note = ''; }
+}
+// 统一设置音频源（网址或 blob），并接管候选链
+function srcApplyUrl(u, mode, label) {
+  if (!u) return;
+  try {
+    AUDIO_CANDIDATES.length = 0;
+    AUDIO_CANDIDATES.push(u);
+    AUDIO.idx = 0; AUDIO.ok = false; AUDIO.failed = false; AUDIO.duration = 0;
+    audioEl.src = u;
+    if (typeof audioEl.load === 'function') audioEl.load();
+    SRC.mode = mode;
+    SRC.name = (label || u).slice(0, 40);
+    SRC.note = 'SOURCE SET — WAITING FOR STREAM';
+  } catch (e) { SRC.note = 'SOURCE FAILED'; }
+}
+function srcUseBuiltin() {
+  AUDIO_CANDIDATES.length = 0;
+  for (let i = 0; i < AUDIO_DEFAULT_CANDIDATES.length; i++) AUDIO_CANDIDATES.push(AUDIO_DEFAULT_CANDIDATES[i]);
+  AUDIO.idx = 0; AUDIO.ok = false; AUDIO.failed = false; AUDIO.duration = 0;
+  SRC.mode = 'local'; SRC.name = ''; SRC.note = 'BUILT-IN SOURCE';
+  loadSource(0);
+}
+function srcActivate() {
+  if (SRC.sel === 0) srcUseBuiltin();
+  else if (SRC.sel === 1) { try { fileInputEl.click(); } catch (e) { SRC.note = 'UPLOAD UNAVAILABLE'; } }
+  else { SRC.note = 'TYPE AN ADDRESS, THEN ENTER'; layoutUrlBox(); urlInputEl.style.display = 'block'; urlInputEl.focus(); }
+}
+function srcKey(e) {
+  const k = e.key;
+  if (k === 'Escape' || k === 'm' || k === 'M') { srcOpen(false); return true; }
+  if (k === 'ArrowUp') { SRC.sel = (SRC.sel + 2) % 3; return true; }
+  if (k === 'ArrowDown') { SRC.sel = (SRC.sel + 1) % 3; return true; }
+  if (k === '1' || k === '2' || k === '3') { SRC.sel = Number(k) - 1; return true; }
+  if (k === 'Enter') { srcActivate(); return true; }
+  return false;
+}
+function renderSrcPanel(frame) {
+  const L = getL(), C = COL();
+  const w = Math.min(104, L.C - 20), h = 15;
+  const x = Math.floor((L.C - w) / 2), y = Math.floor((L.R - h) / 2) - 3;
+  SRC.box = { x: x, y: y, w: w, h: h };
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+    frame.erase(x + i, y + j);
+    if (((i + j) % 3) === 0) frame.set(x + i, y + j, '.', C.glowFar);
+  }
+  frame.box(x, y, w, h, C.bright, 'AUDIO SOURCE', C.pure);
+  frame.text(x + w - 11, y, '[M] CLOSE', C.light);
+  const items = [
+    ['1', 'BUILT-IN FILE', SRC.mode === 'local' ? 'ACTIVE' : 'music.mp3 / flac / ogg ...'],
+    ['2', 'UPLOAD FROM DISK', SRC.mode === 'file' ? (SRC.name || 'ACTIVE') : 'click here -> file dialog'],
+    ['3', 'LOAD FROM URL', SRC.mode === 'url' ? (SRC.name || 'ACTIVE') : 'type an http(s) address']
+  ];
+  for (let i = 0; i < items.length; i++) {
+    const sel = (i === SRC.sel), yy = y + 4 + i * 2;
+    frame.text(x + 3, yy, sel ? '>' : ' ', C.pure);
+    frame.text(x + 5, yy, ('[' + items[i][0] + '] ' + items[i][1]).padEnd(24, ' '), sel ? C.pure : C.mid, sel);
+    frame.text(x + 31, yy, items[i][2].slice(0, w - 34), sel ? C.light : C.dark);
+  }
+  const src = (AUDIO_CANDIDATES[0] || 'music.mp3');
+  frame.text(x + 4, y + h - 4, 'SOURCE : ' + String(src).slice(0, w - 14), C.dark);
+  frame.text(x + 4, y + h - 2, SRC.note || 'CLICK OR UP/DOWN + ENTER   ·   ESC CLOSE   ·   DROP A FILE ANYWHERE', C.light);
+}
+function layoutUrlBox() {
+  const L = getL(), b = SRC.box;
+  placeInput(urlInputEl, b.x + 5, b.y + 11, b.w - 10);
+}
+
 
 /* ---- 音频事件 ---- */
 audioEl.addEventListener('loadedmetadata', function () {
