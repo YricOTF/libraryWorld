@@ -1,1320 +1,3420 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>AI Chat · 文件式输出客户端</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>world.execute(me); // ASCII CRT MV</title>
 <style>
-*{box-sizing:border-box;}
-:root{
-  --bg:#ffffff; --bg-soft:#f7f7f8; --bg-side:#f9f9fa; --border:#e6e6e8;
-  --text:#16181d; --muted:#8a8f98; --accent:#4d6bfe; --accent-soft:#eef1ff;
-  --code-bg:#fafafb;
-  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
-  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+/* ===========================================================================
+   页面样式：只做三件事 —— 黑底居中、canvas 铺满、HTML 输入框伪装成终端光标行
+   所有视觉（颜色 / 辉光 / 扫描线 / 暗角 / 故障）都在 canvas 里逐字符绘制，
+   CSS 只负责"机壳"部分。
+   =========================================================================== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%; overflow: hidden;
+  /* CRT 机壳黑：任何风格下都成立的中性底色（不在六套预设的"画面色"约束内） */
+  background: #000;
+  -webkit-tap-highlight-color: transparent;
 }
-html,body{height:100%;margin:0;}
-body{
-  font-family:var(--font); font-size:15px; color:var(--text); background:var(--bg);
-  -webkit-font-smoothing:antialiased; overflow:hidden;
-}
-button{font-family:inherit;cursor:pointer;}
-.app{display:flex;height:100vh;height:100dvh;overflow:hidden;}
+body { display: flex; align-items: center; justify-content: center; }
+#stage { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
 
-/* ============ 侧边栏 ============ */
-.sidebar{
-  width:260px;flex:0 0 260px;background:var(--bg-side);border-right:1px solid var(--border);
-  display:flex;flex-direction:column;transition:margin-left .22s ease;z-index:60;
-}
-.sidebar.collapsed{margin-left:-260px;}
-.sidebar-head{padding:12px;}
-.new-chat{
-  width:100%;display:flex;align-items:center;justify-content:center;gap:6px;
-  padding:10px;border-radius:10px;border:1px solid var(--border);background:#fff;
-  color:var(--text);font-size:14px;font-weight:500;transition:.15s;
-}
-.new-chat:hover{background:var(--accent-soft);border-color:#c7d2fe;color:var(--accent);}
-.conv-list{flex:1;overflow-y:auto;padding:4px 8px;}
-.conv-item{
-  display:flex;align-items:center;gap:6px;padding:9px 10px;border-radius:9px;
-  font-size:13.5px;color:#3f4451;cursor:pointer;margin-bottom:2px;user-select:none;
-}
-.conv-item:hover{background:rgba(0,0,0,.045);}
-.conv-item.active{background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.07);font-weight:500;color:var(--text);}
-.conv-title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.conv-del{
-  opacity:0;border:none;background:transparent;color:var(--muted);
-  font-size:16px;line-height:1;padding:2px 5px;border-radius:5px;flex:0 0 auto;transition:.15s;
-}
-.conv-item:hover .conv-del{opacity:1;}
-.conv-del:hover{background:rgba(0,0,0,.08);color:#e5484d;}
-.sidebar-foot{padding:10px;border-top:1px solid var(--border);display:flex;gap:6px;}
-.side-btn{
-  flex:1;padding:8px;border-radius:9px;border:none;background:transparent;
-  font-size:12.5px;color:var(--muted);transition:.15s;
-}
-.side-btn:hover{background:rgba(0,0,0,.05);color:var(--text);}
-.sidebar-mask{display:none;}
-
-/* ============ 主区 ============ */
-.main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative;background:var(--bg);}
-.topbar{
-  height:54px;flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:0 16px;
-  border-bottom:1px solid var(--border);background:rgba(255,255,255,.88);
-  backdrop-filter:blur(8px);z-index:10;
-}
-.icon-btn{
-  border:none;background:transparent;font-size:17px;color:var(--muted);
-  width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;transition:.15s;
-}
-.icon-btn:hover{background:rgba(0,0,0,.05);color:var(--text);}
-.topbar-title{font-size:14.5px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.model-badge{
-  font-size:12px;color:var(--muted);background:var(--bg-soft);border:1px solid var(--border);
-  padding:4px 10px;border-radius:20px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+#mainCanvas {
+  position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block;
+  /* 屏幕弯曲：幅度 < 1%，只做极轻微的四角收圆 + 透视，避免几何失真 */
+  border-radius: 14px;
+  transform: perspective(1400px) scale(0.999);
+  transform-origin: 50% 50%;
+  /* 让放大后的字符保持柔和（真正的清晰度控制交给 canvas 的 imageSmoothing） */
+  image-rendering: auto;
 }
 
-/* ============ 消息区 ============ */
-.messages{flex:1;overflow-y:auto;overflow-x:hidden;padding:26px 18px 10px;}
-.messages::-webkit-scrollbar{width:8px;}
-.messages::-webkit-scrollbar-thumb{background:#d8d8dc;border-radius:4px;}
-.messages::-webkit-scrollbar-thumb:hover{background:#c0c0c6;}
-.messages::-webkit-scrollbar-track{background:transparent;}
-
-.msg{display:flex;gap:12px;max-width:820px;margin:0 auto 24px;align-items:flex-start;}
-.msg.user{flex-direction:row-reverse;}
-.avatar{
-  width:30px;height:30px;flex:0 0 30px;border-radius:9px;display:flex;align-items:center;
-  justify-content:center;font-size:12px;font-weight:600;color:#fff;user-select:none;
+/* 对话阶段的行内输入框：透明、无边框、颜色跟随当前风格，看起来就是终端的一行 */
+#userInput {
+  position: absolute; display: none;
+  background: transparent; border: none; outline: none;
+  border-bottom: 1px solid currentColor;
+  font-family: 'Courier New', 'Consolas', 'Menlo', monospace;
+  letter-spacing: 0; padding: 0 2px; line-height: 1.1;
+  caret-color: currentColor;
 }
-.msg.user .avatar{background:#1f2937;}
-.msg.assistant .avatar{background:linear-gradient(135deg,#4d6bfe,#7c3aed);}
-.content{min-width:0;flex:1 1 auto;}
-.msg.user .content{flex:0 1 auto;max-width:85%;display:flex;flex-direction:column;align-items:flex-end;}
-.bubble{
-  background:var(--bg-soft);border:1px solid var(--border);padding:10px 14px;border-radius:14px;
-  white-space:pre-wrap;word-break:break-word;line-height:1.65;max-width:100%;
-}
-
-/* Markdown */
-.md{line-height:1.75;word-wrap:break-word;overflow-wrap:anywhere;}
-.md p{margin:0 0 12px;}
-.md p:last-child{margin-bottom:0;}
-.md h1,.md h2,.md h3,.md h4,.md h5,.md h6{margin:18px 0 10px;line-height:1.4;font-weight:600;}
-.md h1{font-size:20px;} .md h2{font-size:17.5px;} .md h3{font-size:16px;}
-.md h4,.md h5,.md h6{font-size:15px;}
-.md ul,.md ol{margin:0 0 12px;padding-left:22px;}
-.md li{margin:4px 0;}
-.md blockquote{border-left:3px solid var(--border);margin:0 0 12px;padding:2px 0 2px 14px;color:var(--muted);}
-.md a{color:var(--accent);text-decoration:none;}
-.md a:hover{text-decoration:underline;}
-.md hr{border:none;border-top:1px solid var(--border);margin:18px 0;}
-.md img{max-width:100%;border-radius:8px;}
-.md :not(pre) > code{
-  background:rgba(0,0,0,.06);padding:2px 6px;border-radius:5px;
-  font-size:.88em;font-family:var(--mono);color:#c7254e;
-}
-.cursor{
-  display:inline-block;width:7px;height:15px;background:var(--accent);border-radius:2px;
-  margin-left:2px;vertical-align:-2px;animation:blink 1s steps(2,start) infinite;
-}
-@keyframes blink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
-
-.msg-actions{display:flex;gap:2px;margin-top:8px;opacity:.5;transition:opacity .15s;}
-.msg:hover .msg-actions{opacity:1;}
-.msg-actions button{
-  border:none;background:transparent;color:var(--muted);font-size:12px;
-  padding:4px 9px;border-radius:7px;transition:.15s;
-}
-.msg-actions button:hover{background:rgba(0,0,0,.06);color:var(--text);}
-
-/* ============ 文件卡片（核心） ============ */
-.file-card{
-  border:1px solid var(--border);border-radius:12px;overflow:hidden;margin:12px 0;
-  background:#fff;max-width:100%;box-shadow:0 1px 3px rgba(0,0,0,.03);
-}
-.file-head{display:flex;align-items:center;gap:10px;padding:10px 12px;background:#f7f7f9;border-bottom:1px solid var(--border);}
-.file-icon{
-  width:30px;height:30px;flex:0 0 30px;border-radius:8px;background:#fff;border:1px solid var(--border);
-  display:flex;align-items:center;justify-content:center;font-size:15px;
-}
-.file-info{min-width:0;flex:1;}
-.file-name{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);}
-.file-sub{font-size:11.5px;color:var(--muted);margin-top:2px;}
-.file-actions{margin-left:auto;display:flex;gap:3px;flex:0 0 auto;}
-.fc-btn{
-  border:none;background:transparent;padding:5px 9px;border-radius:7px;
-  font-size:12px;color:var(--muted);transition:.15s;white-space:nowrap;
-}
-.fc-btn:hover{background:rgba(0,0,0,.07);color:var(--text);}
-.fc-btn[data-act="preview"]{color:var(--accent);font-weight:500;background:var(--accent-soft);}
-.fc-btn[data-act="preview"]:hover{background:#e0e6ff;}
-
-.file-body{
-  position:relative;background:var(--code-bg);max-height:340px;overflow:hidden;
-  transition:max-height .3s ease;
-}
-.file-body.expanded{max-height:none;}
-.file-body:not(.expanded)::after{
-  content:'';position:absolute;left:0;right:0;bottom:0;height:70px;
-  background:linear-gradient(to bottom,rgba(250,250,251,0),var(--code-bg));
-  pointer-events:none;
-}
-.file-body pre{
-  margin:0;padding:12px 14px;overflow-x:auto;font-family:var(--mono);
-  font-size:12.5px;line-height:1.65;tab-size:2;
-  -webkit-overflow-scrolling:touch;
-}
-.file-body pre code{font-family:inherit;color:#24292f;white-space:pre;}
-.file-toggle{
-  width:100%;border:none;border-top:1px solid var(--border);background:#f7f7f9;
-  padding:8px;font-size:12px;color:var(--muted);transition:.15s;
-}
-.file-toggle:hover{background:#f0f0f3;color:var(--text);}
-.file-preview{border-top:1px solid var(--border);height:min(440px,55vh);background:#fff;}
-.file-preview iframe{width:100%;height:100%;border:0;display:block;background:#fff;}
-
-/* ============ 空状态 ============ */
-.empty{max-width:820px;margin:0 auto;text-align:center;padding:56px 20px;}
-.empty-logo{font-size:34px;color:var(--accent);}
-.empty h2{font-size:21px;margin:16px 0 8px;font-weight:600;}
-.empty p{color:var(--muted);font-size:13.5px;margin:0 0 22px;line-height:1.7;}
-.chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;}
-.chip{
-  border:1px solid var(--border);background:#fff;border-radius:20px;
-  padding:8px 15px;font-size:13px;color:#3f4451;transition:.15s;
-}
-.chip:hover{border-color:#c7d2fe;background:var(--accent-soft);color:var(--accent);}
-
-/* ============ 输入区 ============ */
-.composer{flex:0 0 auto;padding:8px 18px 14px;background:#fff;}
-.composer-inner{
-  max-width:820px;margin:0 auto;display:flex;align-items:flex-end;gap:8px;
-  border:1px solid var(--border);border-radius:16px;background:#fff;
-  padding:8px 8px 8px 14px;box-shadow:0 2px 12px rgba(0,0,0,.04);
-  transition:border-color .15s,box-shadow .15s;
-}
-.composer-inner:focus-within{border-color:#b9c4ff;box-shadow:0 0 0 3px rgba(77,107,254,.09);}
-#input{
-  flex:1;border:none;outline:none;resize:none;font-family:inherit;font-size:15px;
-  line-height:1.6;max-height:180px;padding:5px 0;background:transparent;color:var(--text);
-}
-#input::placeholder{color:#a8adb8;}
-.send-btn,.stop-btn{
-  width:34px;height:34px;flex:0 0 34px;border-radius:10px;border:none;
-  display:flex;align-items:center;justify-content:center;transition:.15s;
-}
-.send-btn{background:var(--accent);color:#fff;}
-.send-btn:hover{background:#3d59e8;}
-.send-btn:disabled{background:#d5d9e5;cursor:not-allowed;}
-.stop-btn{background:#f1f2f4;color:#e5484d;font-size:13px;}
-.stop-btn:hover{background:#ffe9ea;}
-.composer-tip{text-align:center;font-size:11.5px;color:#b3b7c0;margin-top:9px;}
-
-/* ============ 错误提示 ============ */
-.error-box{
-  max-width:820px;margin:0 auto 24px;padding:12px 16px;border-radius:12px;
-  background:#fff5f5;border:1px solid #ffd9d9;color:#b42318;font-size:13.5px;line-height:1.65;
-}
-.error-box strong{display:block;margin-bottom:4px;font-size:13.5px;}
-
-/* ============ 弹窗 ============ */
-.modal-mask{
-  position:fixed;inset:0;background:rgba(15,18,26,.45);display:none;
-  align-items:center;justify-content:center;z-index:200;padding:20px;
-}
-.modal-mask.show{display:flex;}
-.modal{
-  width:100%;max-width:470px;background:#fff;border-radius:16px;
-  box-shadow:0 20px 60px rgba(0,0,0,.22);overflow:hidden;animation:pop .18s ease;
-}
-@keyframes pop{from{transform:scale(.96);opacity:0}to{transform:scale(1);opacity:1}}
-.modal-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border);}
-.modal-head h3{margin:0;font-size:16px;}
-.modal-close{border:none;background:transparent;font-size:22px;line-height:1;color:var(--muted);padding:0 4px;}
-.modal-close:hover{color:var(--text);}
-.modal-body{padding:16px 18px;display:flex;flex-direction:column;gap:14px;max-height:62vh;overflow-y:auto;}
-.field{display:flex;flex-direction:column;gap:6px;}
-.field label{font-size:13px;font-weight:500;color:#374151;}
-.field input,.field textarea{
-  width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;
-  font-size:14px;font-family:inherit;outline:none;transition:.15s;background:#fff;color:var(--text);
-}
-.field input:focus,.field textarea:focus{border-color:#b9c4ff;box-shadow:0 0 0 3px rgba(77,107,254,.1);}
-.field textarea{resize:vertical;min-height:72px;line-height:1.55;}
-.hint{font-size:12px;color:var(--muted);margin:0;line-height:1.65;}
-.modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:14px 18px;border-top:1px solid var(--border);background:#fafafa;}
-.btn-primary{background:var(--accent);color:#fff;border:none;padding:9px 18px;border-radius:9px;font-size:14px;font-weight:500;}
-.btn-primary:hover{background:#3d59e8;}
-.btn-ghost{background:#fff;color:var(--text);border:1px solid var(--border);padding:9px 18px;border-radius:9px;font-size:14px;}
-.btn-ghost:hover{background:#f5f5f6;}
-
-/* ============ Toast ============ */
-.toast{
-  position:fixed;left:50%;bottom:90px;transform:translateX(-50%) translateY(10px);
-  background:rgba(22,24,29,.92);color:#fff;padding:9px 17px;border-radius:10px;
-  font-size:13px;opacity:0;transition:.25s;pointer-events:none;z-index:300;white-space:nowrap;
-}
-.toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
-
-/* ============ 响应式 ============ */
-@media (max-width:820px){
-  .sidebar{
-    position:fixed;left:0;top:0;bottom:0;
-    transform:translateX(-100%);transition:transform .24s ease;
-    box-shadow:0 0 40px rgba(0,0,0,.15);margin-left:0 !important;
-  }
-  .sidebar.open{transform:translateX(0);}
-  .sidebar-mask{
-    display:block;position:fixed;inset:0;background:rgba(0,0,0,.35);
-    opacity:0;pointer-events:none;transition:.24s;z-index:55;
-  }
-  .sidebar-mask.show{opacity:1;pointer-events:auto;}
-  .messages{padding:18px 12px 6px;}
-  .msg{gap:9px;margin-bottom:20px;}
-  .composer{padding:8px 12px 12px;}
-  .file-preview{height:min(360px,50vh);}
-  .model-badge{display:none;}
-}
+#userInput::selection { background: rgba(255,255,255,.25); }
 </style>
 </head>
 <body>
-
-<div class="app" id="app">
-  <aside class="sidebar" id="sidebar">
-    <div class="sidebar-head">
-      <button class="new-chat" id="newChatBtn">＋ 新建对话</button>
-    </div>
-    <div class="conv-list" id="convList"></div>
-    <div class="sidebar-foot">
-      <button class="side-btn" id="settingsBtn">⚙️ 设置</button>
-      <button class="side-btn" id="clearAllBtn">🗑 清空全部</button>
-    </div>
-  </aside>
-  <div class="sidebar-mask" id="sidebarMask"></div>
-
-  <main class="main">
-    <header class="topbar">
-      <button class="icon-btn" id="menuBtn" title="侧边栏">☰</button>
-      <div class="topbar-title" id="topbarTitle">新对话</div>
-      <span class="model-badge" id="modelBadge">-</span>
-    </header>
-
-    <div class="messages" id="messages"></div>
-
-    <div class="composer">
-      <div class="composer-inner">
-        <textarea id="input" rows="1" placeholder="输入消息，Enter 发送，Shift + Enter 换行"></textarea>
-        <button class="send-btn" id="sendBtn" title="发送">
-          <svg viewBox="0 0 24 24" width="17" height="17"><path fill="currentColor" d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.993.993 0 00-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/></svg>
-        </button>
-        <button class="stop-btn" id="stopBtn" title="停止生成" style="display:none">■</button>
-      </div>
-      <div class="composer-tip">内容由 AI 生成，请注意甄别</div>
-    </div>
-  </main>
-</div>
-
-<!-- 设置弹窗 -->
-<div class="modal-mask" id="settingsModal">
-  <div class="modal">
-    <div class="modal-head">
-      <h3>设置</h3>
-      <button class="modal-close" id="modalCloseBtn">×</button>
-    </div>
-    <div class="modal-body">
-      <div class="field">
-        <label>API 地址（Base URL）</label>
-        <input id="setBaseUrl" placeholder="https://api.openai.com/v1" spellcheck="false">
-      </div>
-      <div class="field">
-        <label>API Key</label>
-        <input id="setApiKey" type="password" placeholder="sk-..." spellcheck="false">
-      </div>
-      <div class="field">
-        <label>模型名称</label>
-        <input id="setModel" placeholder="gpt-4o-mini" spellcheck="false">
-      </div>
-      <div class="field">
-        <label>系统提示词（可选）</label>
-        <textarea id="setSystem" placeholder="例如：你是一个资深前端工程师…"></textarea>
-      </div>
-      <div class="field">
-        <label>温度（0 ~ 2）</label>
-        <input id="setTemp" type="number" min="0" max="2" step="0.1" placeholder="0.7">
-      </div>
-      <p class="hint">
-        支持任何 <b>OpenAI 兼容</b> 接口：OpenAI / DeepSeek / Moonshot / 通义千问 / 智谱 / 硅基流动 / 本地 Ollama 等。<br>
-        配置只保存在你自己的浏览器 localStorage 中。
-      </p>
-    </div>
-    <div class="modal-foot">
-      <button class="btn-ghost" id="btnCancel">取消</button>
-      <button class="btn-primary" id="btnSaveSettings">保存</button>
-    </div>
+  <div id="stage">
+    <!-- 可见画布：窗口分辨率，负责最终合成（辉光 / 扫描线 / 暗角 / 故障） -->
+    <canvas id="mainCanvas"></canvas>
+    <!-- 对话阶段的真实输入框（唯一允许存在的 HTML 表单元素，按网格坐标对齐） -->
+    <input id="userInput" type="text" maxlength="64" autocomplete="off"
+           autocapitalize="off" autocorrect="off" spellcheck="false">
   </div>
-</div>
-
-<div class="toast" id="toast"></div>
+  <!-- 离屏画布：字符网格的逐字符渲染目标（尺寸在 initGrid() 里按格子数设定） -->
+  <canvas id="offCanvas" style="display:none"></canvas>
+  <!-- 音频：默认先试 music.mp3；若不存在会自动回退到 music.flac 等候选源 -->
+  <audio id="music" src="music.mp3" preload="auto"></audio>
 
 <script>
-(function(){
+/* ===========================================================================
+   world.execute(me);  —  单文件 ASCII / CRT 音乐影像
+   ---------------------------------------------------------------------------
+   三段式流程：
+     STYLE（风格选择） → LOADING（链路同步，即音频缓冲） → DIALOG（AI 女友对话）
+     → MV（五场景，时间轴 = audio.currentTime / audio.duration）
+   渲染管线（每帧）：
+     Frame(字符网格) → GlowEngine(光晕扩散) → drawOffCanvas(逐字符 fillText)
+     → compositeToMain(清晰层 + 双层 Bloom + 扫描线 + 暗角 + 故障分离 + 闪白)
+   约束：只用 Canvas 2D；不用任何外部库；画面颜色一律取自 STYLE.colors。
+   =========================================================================== */
 'use strict';
 
-/* ============================================================
- *  常量 & 工具
- * ============================================================ */
-const STORAGE_KEY  = 'ai_chat_app_v1';
-const SETTINGS_KEY = 'ai_chat_settings_v1';
-const DEFAULT_SETTINGS = {
-  baseUrl: 'https://api.openai.com/v1',
-  apiKey: '',
-  model: 'gpt-4o-mini',
-  systemPrompt: '',
-  temperature: 0.7
+/* ---------------------------------------------------------------------------
+   [1] 顶部配置
+   --------------------------------------------------------------------------- */
+
+// 开发者面板总开关（交付版保持 true；里面对画面无副作用，只有按键才唤出）
+const ENABLE_DEV_MODE = true;
+
+// 全片唯一允许出现在六套预设之外的颜色：LOVE 终章心形的"暖白"。
+// 需求明确要求终章由主色渐变到 #FFF8E7，因此在这里单独声明并集中说明。
+const WARM_WHITE = '#FFF8E7';
+
+// 心跳 / 脉动相位用的近似 BPM。注意：它只影响"节拍脉冲"的相位，
+// 所有时间仍来自 audio.currentTime，不引入任何独立计时器。
+const BEAT_BPM = 128;
+
+const CONFIG = {
+  // —— 字符网格 ——
+  // 需求里写"offCanvas 分辨率等于字符网格尺寸（200x72）"，但 1 格 = 1 像素时
+  // fillText 无法成形，因此每格给固定像素 CELL_W x CELL_H，网格仍是 200x72 格。
+  gridCols: 200,
+  gridRows: 72,
+  cellW: 7.2,               // 列宽（px）：0.6 字宽比 x 12px 字号，保证等宽推进精确对齐
+  cellH: 12.2,              // 行高（px）
+  charAspect: 0.6,
+  fontFamily: "'Courier New', 'Consolas', 'Menlo', monospace",
+  fontSize: 12,             // 字号；cellW = fontSize * 0.6 是等宽字体的推进宽度
+
+  // —— 颜色与效果（由 STYLE.apply 注入）——
+  colors: {},
+  glowStrength: 1.0,
+  scanlineAlpha: 0.15,
+  vignetteAlpha: 0.6,
+  glitchInterval: 6.0,
+  chromaticAberration: 2,
+  bloomRadius: 4,
+
+  // —— 运行期可调 ——
+  fpsTarget: 60,
+  glowBoost: 1.0,           // 场景级辉光倍率（LOVE 终章会拉满）
+  glowBudget: 420,          // 单帧允许开 shadowBlur 的字符数上限（性能权衡，见 drawOffCanvas）
+
+  // —— 时间轴：全部是"占音频总时长的百分比" ——
+  // 问题 5：场景边界不再写死在这里，改由歌词关键句驱动（见 SCENE_KEYS / getCurrentScene）
+  // —— 歌词：启动时由 LRC 原始时间戳 ÷ 实际时长 归一化成 {t:0..1, en, cn} ——
+  lyrics: [],
+  tailNorm: 0.985           // "最后几秒"的归一化起点，同样按时长换算
 };
 
-const LANG_NAMES = {
-  html:'HTML', htm:'HTML', xml:'XML', svg:'SVG', css:'CSS', scss:'SCSS', less:'Less',
-  js:'JavaScript', javascript:'JavaScript', jsx:'JSX', mjs:'JavaScript',
-  ts:'TypeScript', typescript:'TypeScript', tsx:'TSX',
-  json:'JSON', jsonc:'JSON', yaml:'YAML', yml:'YAML', toml:'TOML', ini:'INI',
-  md:'Markdown', markdown:'Markdown', mdx:'MDX',
-  py:'Python', python:'Python', java:'Java', c:'C', h:'C', cpp:'C++', cc:'C++', cxx:'C++',
-  cs:'C#', csharp:'C#', go:'Go', golang:'Go', rust:'Rust', rs:'Rust',
-  php:'PHP', ruby:'Ruby', rb:'Ruby', swift:'Swift', kotlin:'Kotlin', kt:'Kotlin',
-  scala:'Scala', dart:'Dart', lua:'Lua', r:'R', perl:'Perl', pl:'Perl',
-  sh:'Shell', bash:'Bash', shell:'Shell', zsh:'Shell', powershell:'PowerShell', ps1:'PowerShell',
-  sql:'SQL', vue:'Vue', svelte:'Svelte', dockerfile:'Dockerfile', makefile:'Makefile',
-  diff:'Diff', patch:'Diff', text:'纯文本', plaintext:'纯文本', txt:'纯文本'
+/* 六套视觉风格预设（完整参数，运行时通过 STYLE.apply 注入 CONFIG） */
+const STYLE_PRESETS = [
+  {
+    id: 'WHITE', name: 'COLD WHITE', nameCN: '冷白',
+    description: '高对比度单色 CRT，冷白光，工业感',
+    descriptionCN: '高对比度单色 CRT，冷白光，工业感',
+    colors: {
+      bright: '#F5F5F5', pure: '#FFFFFF', light: '#D0D0D0',
+      mid: '#9A9A9A', dark: '#5C5C5C', deep: '#2E2E2E',
+      alert: '#FF2A2A', glowNear: '#404040', glowFar: '#202020',
+      black: '#000000'
+    },
+    effects: {
+      glowStrength: 1.0, scanlineAlpha: 0.15, vignetteAlpha: 0.60,
+      glitchInterval: 6.0, chromaticAberration: 2, bloomRadius: 4
+    }
+  },
+  {
+    id: 'AMBER', name: 'PHOSPHOR AMBER', nameCN: '琥珀',
+    description: 'Classic old terminal, warm amber phosphor, nostalgic',
+    descriptionCN: '经典老式终端，暖橙色磷光，怀旧感',
+    colors: {
+      bright: '#FFB000', pure: '#FFD060', light: '#CC8800',
+      mid: '#8B5A00', dark: '#4A3000', deep: '#221600',
+      alert: '#FF2A2A', glowNear: '#5A3A00', glowFar: '#2A1A00',
+      black: '#0A0600'
+    },
+    effects: {
+      glowStrength: 1.4, scanlineAlpha: 0.20, vignetteAlpha: 0.70,
+      glitchInterval: 8.0, chromaticAberration: 1, bloomRadius: 6
+    }
+  },
+  {
+    id: 'GREEN', name: 'MATRIX GREEN', nameCN: '矩阵绿',
+    description: 'Classic hacker green screen, phosphor green, radiation feel',
+    descriptionCN: '经典黑客绿屏，磷光绿，强辐射感',
+    colors: {
+      bright: '#00FF41', pure: '#80FF9C', light: '#00CC33',
+      mid: '#008822', dark: '#004411', deep: '#001A08',
+      alert: '#FF0033', glowNear: '#004A14', glowFar: '#001F08',
+      black: '#000000'
+    },
+    effects: {
+      glowStrength: 1.6, scanlineAlpha: 0.18, vignetteAlpha: 0.75,
+      glitchInterval: 5.0, chromaticAberration: 3, bloomRadius: 6
+    }
+  },
+  {
+    id: 'RED', name: 'ALERT RED', nameCN: '警戒红',
+    description: 'Danger signal red, system failure warning, oppressive',
+    descriptionCN: '危险信号红，系统崩溃预警，压迫感',
+    colors: {
+      bright: '#FF3355', pure: '#FF6B80', light: '#CC1133',
+      mid: '#880022', dark: '#440011', deep: '#1A0005',
+      alert: '#FFFFFF', glowNear: '#4A000F', glowFar: '#1F0006',
+      black: '#0A0000'
+    },
+    effects: {
+      glowStrength: 1.5, scanlineAlpha: 0.22, vignetteAlpha: 0.80,
+      glitchInterval: 3.0, chromaticAberration: 4, bloomRadius: 7
+    }
+  },
+  {
+    id: 'CYAN', name: 'CYBER CYAN', nameCN: '赛博青',
+    description: 'Cold sci-fi blue, cyberpunk aesthetic, futuristic',
+    descriptionCN: '冷峻科幻蓝，赛博朋克风，未来感',
+    colors: {
+      bright: '#00E5FF', pure: '#80F0FF', light: '#00B0CC',
+      mid: '#007088', dark: '#003844', deep: '#001520',
+      alert: '#FF2A6D', glowNear: '#003D4F', glowFar: '#001825',
+      black: '#000508'
+    },
+    effects: {
+      glowStrength: 1.8, scanlineAlpha: 0.12, vignetteAlpha: 0.65,
+      glitchInterval: 5.5, chromaticAberration: 5, bloomRadius: 8
+    }
+  },
+  {
+    id: 'MONO', name: 'PURE MONO', nameCN: '纯黑白',
+    description: 'Minimal black and white, no color, pure character art',
+    descriptionCN: '极简黑白，无彩色，纯粹字符艺术',
+    colors: {
+      bright: '#FFFFFF', pure: '#FFFFFF', light: '#C0C0C0',
+      mid: '#808080', dark: '#404040', deep: '#1A1A1A',
+      alert: '#808080', glowNear: '#303030', glowFar: '#181818',
+      black: '#000000'
+    },
+    effects: {
+      glowStrength: 0.6, scanlineAlpha: 0.10, vignetteAlpha: 0.40,
+      glitchInterval: 12.0, chromaticAberration: 0, bloomRadius: 2
+    }
+  }
+];
+
+/* 运行时当前风格：所有绘制代码只准读 STYLE.colors / STYLE.effects */
+const STYLE = {
+  current: null,
+  colors: {},
+  effects: {},
+  apply(presetId) {
+    const preset = STYLE_PRESETS.find(p => p.id === presetId);
+    if (!preset) return;
+    this.current = presetId;
+    this.colors = { ...preset.colors };
+    this.effects = { ...preset.effects };
+    CONFIG.colors = this.colors;
+    CONFIG.glowStrength = preset.effects.glowStrength;
+    CONFIG.scanlineAlpha = preset.effects.scanlineAlpha;
+    CONFIG.vignetteAlpha = preset.effects.vignetteAlpha;
+    CONFIG.glitchInterval = preset.effects.glitchInterval;
+    CONFIG.chromaticAberration = preset.effects.chromaticAberration;
+    CONFIG.bloomRadius = preset.effects.bloomRadius;
+    // 风格切换时重建依赖颜色的缓存（扫描线图案 / 暗角渐变由 compositeToMain 惰性重建）
+    scanDirty = true;
+    vignetteDirty = true;
+  },
+  preset() { return STYLE_PRESETS.find(p => p.id === this.current) || STYLE_PRESETS[0]; }
 };
-const EXT_MAP = {
-  html:'html', htm:'html', xml:'xml', svg:'svg', css:'css', scss:'scss', less:'less',
-  js:'js', javascript:'js', jsx:'jsx', mjs:'mjs', ts:'ts', typescript:'ts', tsx:'tsx',
-  json:'json', yaml:'yml', yml:'yml', toml:'toml', ini:'ini',
-  md:'md', markdown:'md', py:'py', python:'py', java:'java', c:'c', cpp:'cpp', cs:'cs',
-  go:'go', rust:'rs', rs:'rs', php:'php', ruby:'rb', rb:'rb', swift:'swift',
-  kotlin:'kt', kt:'kt', scala:'scala', dart:'dart', lua:'lua', r:'r', perl:'pl',
-  sh:'sh', bash:'sh', shell:'sh', zsh:'sh', powershell:'ps1',
-  sql:'sql', vue:'vue', svelte:'svelte', diff:'diff'
-};
 
-const el = id => document.getElementById(id);
-const messagesEl   = el('messages');
-const inputEl      = el('input');
-const sendBtn      = el('sendBtn');
-const stopBtn      = el('stopBtn');
-const convListEl   = el('convList');
-const sidebarEl    = el('sidebar');
-const sidebarMask  = el('sidebarMask');
-const topbarTitle  = el('topbarTitle');
-const modelBadge   = el('modelBadge');
-const settingsModal= el('settingsModal');
-const toastEl      = el('toast');
+const STYLE_KEY = 'world_execute_me_style';   // localStorage 持久化键名
 
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+/* ---------------------------------------------------------------------------
+   [2] 通用工具
+   --------------------------------------------------------------------------- */
+const clamp = (v, a, b) => (v < a ? a : (v > b ? b : v));
+const lerp = (a, b, k) => a + (b - a) * k;
+const easeInOut = k => (k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2);
+const easeOut = k => 1 - Math.pow(1 - k, 3);
+const easeIn = k => k * k * k;
 
-function escapeHtml(str){
-  return String(str == null ? '' : str)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+// 确定性伪随机：同一 (x,y) 每帧得到同一值 —— 场景在拖动进度后依然稳定，不会"抖动"
+function hash11(n) { const s = Math.sin(n * 127.1) * 43758.5453123; return s - Math.floor(s); }
+function hash2(x, y) { return hash11(x * 57.31 + y * 131.77); }
+
+// 时间格式：MM:SS.s（顶栏走时器 / 开发者面板都用它）
+function fmtTime(sec) {
+  if (!isFinite(sec) || sec < 0) sec = 0;
+  const m = Math.floor(sec / 60);
+  const s = sec - m * 60;
+  return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s.toFixed(1);
 }
 
-let toastTimer = null;
-function toast(msg){
-  toastEl.textContent = msg;
-  toastEl.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2000);
+const DENSITY = ' .:-=+*#%@';   // 字符密度阶梯（暗 → 亮）
+const CHAR_LUM = {};            // 字符 → 亮度 0..1，辉光与灰度映射共用
+for (let i = 0; i < DENSITY.length; i++) CHAR_LUM[DENSITY[i]] = i / (DENSITY.length - 1);
+// 半角块 / 特殊符号的亮度（进度条、边框、心形点缀）
+CHAR_LUM['█'] = 1.0; CHAR_LUM['▓'] = 0.78; CHAR_LUM['▒'] = 0.55; CHAR_LUM['░'] = 0.34;
+CHAR_LUM['♥'] = 1.0; CHAR_LUM['·'] = 0.16; CHAR_LUM['│'] = 0.34; CHAR_LUM['─'] = 0.34;
+CHAR_LUM['┌'] = 0.34; CHAR_LUM['┐'] = 0.34; CHAR_LUM['└'] = 0.34; CHAR_LUM['┘'] = 0.34;
+CHAR_LUM['├'] = 0.34; CHAR_LUM['┤'] = 0.34; CHAR_LUM['┬'] = 0.34; CHAR_LUM['┴'] = 0.34;
+CHAR_LUM['∞'] = 0.9; CHAR_LUM['█'] = 1.0;
+function lumOf(ch) {
+  if (ch === ' ' || ch === null) return 0;
+  const v = CHAR_LUM[ch];
+  return v === undefined ? 0.62 : v;   // 未知字符（含中文）按中等亮度处理
 }
 
-async function copyText(text){
-  try{
-    if(navigator.clipboard && window.isSecureContext){
-      await navigator.clipboard.writeText(text);
-    }else{
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      ta.remove();
-    }
-    return true;
-  }catch(e){ return false; }
-}
+// 中日韩全角判定：这类字符在等宽字体里占 2 格。
+// 注意：♥ ∞ “” 等符号不算全角 —— 它们在 Courier New 里是半角字形，
+// 若误判成 2 格，心形的 ♥ 轮廓会被撑成一格一点。
+const CJK_RE = /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6]/;
+function charW(ch) { return CJK_RE.test(ch) ? 2 : 1; }
+function strW(s) { let w = 0; for (let i = 0; i < s.length; i++) w += charW(s[i]); return w; }
 
-function downloadText(text, filename){
-  const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename || 'code.txt';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
-}
-
-function formatBytes(n){
-  if(n < 1024) return n + ' B';
-  if(n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
-  return (n/1024/1024).toFixed(2) + ' MB';
-}
-
-function joinUrl(base, path){
-  return String(base || '').replace(/\/+$/, '') + path;
-}
-
-/* ============================================================
- *  状态
- * ============================================================ */
-let state = { conversations: [], currentId: null };
-let generating = false;
-let abortController = null;
-const expandedCards = new Set();
-const previewCards  = new Set();
-
-function getCurrent(){
-  return state.conversations.find(c => c.id === state.currentId);
-}
-
-function saveState(){
-  try{
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      conversations: state.conversations,
-      currentId: state.currentId
-    }));
-  }catch(e){ /* 超出配额时静默 */ }
-}
-
-function loadState(){
-  try{
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if(raw){
-      const d = JSON.parse(raw);
-      if(Array.isArray(d.conversations)) state.conversations = d.conversations;
-      if(d.currentId) state.currentId = d.currentId;
-    }
-  }catch(e){}
-  if(!state.conversations.length){
-    const conv = { id: uid(), title:'新对话', messages: [], createdAt: Date.now() };
-    state.conversations.push(conv);
-    state.currentId = conv.id;
+/* ---------------------------------------------------------------------------
+   [3] Frame —— 字符帧缓冲
+   一帧就是"网格上每个格子写什么字符、什么颜色"。
+   内部用扁平数组存储，热路径零对象分配。
+   --------------------------------------------------------------------------- */
+class Frame {
+  constructor(cols, rows) {
+    this.cols = cols; this.rows = rows;
+    const n = cols * rows;
+    this.ch = new Array(n);          // 字符
+    this.co = new Array(n);          // 颜色字符串
+    this.gl = new Uint8Array(n);     // 1 = 强制参与 shadowBlur 辉光
+    this.clear();
   }
-  if(!state.conversations.some(c => c.id === state.currentId)){
-    state.currentId = state.conversations[0].id;
+  idx(x, y) { return y * this.cols + x; }
+  clear() {
+    this.ch.fill(' ');
+    this.co.fill(null);
+    this.gl.fill(0);
   }
-}
-
-function getSettings(){
-  try{
-    return Object.assign({}, DEFAULT_SETTINGS, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'));
-  }catch(e){ return Object.assign({}, DEFAULT_SETTINGS); }
-}
-
-/* ============================================================
- *  Markdown 渲染（自研轻量实现，无外部依赖）
- * ============================================================ */
-
-/* 行内元素 */
-function inline(text){
-  const codes = [];
-  let s = escapeHtml(text);
-
-  // 保护行内代码
-  s = s.replace(/`([^`\n]+)`/g, (m, p1) => {
-    codes.push(p1);
-    return '\u0001' + (codes.length - 1) + '\u0001';
-  });
-
-  // 图片
-  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g,
-    '<img alt="$1" src="$2" loading="lazy">');
-  // 链接
-  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-  // 加粗
-  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-  s = s.replace(/__([^_\n]+)__/g, '<strong>$1</strong>');
-  // 斜体
-  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
-  // 删除线
-  s = s.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
-
-  // 还原行内代码
-  s = s.replace(/\u0001(\d+)\u0001/g, (m, i) => '<code>' + codes[+i] + '</code>');
-  return s;
-}
-
-/* 文本块 → HTML */
-function renderText(text){
-  if(!text || !text.trim()) return '';
-  const lines = text.split('\n');
-  let html = '';
-  let i = 0;
-  let para = [];
-
-  const flushPara = () => {
-    if(para.length){
-      html += '<p>' + para.map(inline).join('<br>') + '</p>';
-      para = [];
-    }
-  };
-
-  while(i < lines.length){
-    const raw = lines[i];
-    const t = raw.trim();
-
-    if(!t){ flushPara(); i++; continue; }
-
-    // 标题
-    let m = t.match(/^(#{1,6})\s+(.*)$/);
-    if(m){
-      flushPara();
-      const lvl = m[1].length;
-      html += '<h' + lvl + '>' + inline(m[2]) + '</h' + lvl + '>';
-      i++; continue;
-    }
-
-    // 分割线
-    if(/^(-{3,}|\*{3,}|_{3,})$/.test(t)){ flushPara(); html += '<hr>'; i++; continue; }
-
-    // 引用
-    if(/^>\s?/.test(t)){
-      flushPara();
-      const q = [];
-      while(i < lines.length && /^\s*>\s?/.test(lines[i])){
-        q.push(lines[i].replace(/^\s*>\s?/, ''));
-        i++;
+  // 写入字符（空格视为"不写"，避免把已有内容擦掉；需要擦除请用 erase）
+  set(x, y, c, color, glow) {
+    x |= 0; y |= 0;
+    if (x < 0 || y < 0 || x >= this.cols || y >= this.rows) return;
+    if (c === undefined || c === null || c === '' || c === ' ') return;
+    const i = y * this.cols + x;
+    this.ch[i] = c; this.co[i] = color;
+    if (glow) this.gl[i] = 1;
+  }
+  erase(x, y) {
+    x |= 0; y |= 0;
+    if (x < 0 || y < 0 || x >= this.cols || y >= this.rows) return;
+    const i = y * this.cols + x;
+    this.ch[i] = ' '; this.co[i] = null; this.gl[i] = 0;
+  }
+  // 写字符串（自动处理全角占 2 格），返回结束列
+  text(x, y, str, color, glow) {
+    let cx = x | 0;
+    for (let k = 0; k < str.length; k++) {
+      const c = str[k];
+      if (c === ' ') { cx += 1; continue; }
+      const w = charW(c);
+      this.set(cx, y, c, color, glow);
+      if (w === 2 && cx + 1 < this.cols) {
+        const i = this.idx(cx + 1, y);          // 占位符：绘制时跳过，避免右半格重复出字
+        this.ch[i] = '\u0000'; this.co[i] = color;
       }
-      html += '<blockquote>' + renderText(q.join('\n')) + '</blockquote>';
-      continue;
+      cx += w;
     }
-
-    // 无序列表
-    if(/^[-*+]\s+/.test(t)){
-      flushPara();
-      const items = [];
-      while(i < lines.length && /^\s*[-*+]\s+/.test(lines[i].trim())){
-        items.push(lines[i].trim().replace(/^[-*+]\s+/, ''));
-        i++;
-      }
-      html += '<ul>' + items.map(x => '<li>' + inline(x) + '</li>').join('') + '</ul>';
-      continue;
-    }
-
-    // 有序列表
-    if(/^\d+[.)]\s+/.test(t)){
-      flushPara();
-      const items = [];
-      while(i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i].trim())){
-        items.push(lines[i].trim().replace(/^\d+[.)]\s+/, ''));
-        i++;
-      }
-      html += '<ol>' + items.map(x => '<li>' + inline(x) + '</li>').join('') + '</ol>';
-      continue;
-    }
-
-    para.push(t);
-    i++;
+    return cx;
   }
-  flushPara();
-  return html;
-}
-
-/* 切分代码围栏 */
-function splitFences(md){
-  const lines = md.split('\n');
-  const out = [];
-  let buf = [];
-  let i = 0;
-
-  const flush = () => {
-    if(buf.length){ out.push({ type:'text', text: buf.join('\n') }); buf = []; }
-  };
-
-  while(i < lines.length){
-    const m = lines[i].match(/^\s{0,3}```(.*)$/);
-    if(m){
-      flush();
-      const lang = (m[1] || '').trim().split(/\s+/)[0] || '';
-      const codeLines = [];
-      i++;
-      while(i < lines.length){
-        if(/^\s{0,3}```\s*$/.test(lines[i])){ i++; break; }
-        codeLines.push(lines[i]);
-        i++;
-      }
-      out.push({ type:'code', lang: lang, code: codeLines.join('\n') });
-      continue;
-    }
-    buf.push(lines[i]);
-    i++;
+  centerText(y, str, color, glow) { return this.text(Math.floor((this.cols - strW(str)) / 2), y, str, color, glow); }
+  rightText(xEnd, y, str, color, glow) { return this.text(xEnd - strW(str), y, str, color, glow); }
+  hline(x0, x1, y, c, color) { for (let x = x0; x <= x1; x++) this.set(x, y, c, color); }
+  vline(x, y0, y1, c, color) { for (let y = y0; y <= y1; y++) this.set(x, y, c, color); }
+  fillRect(x, y, w, h, c, color) {
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) this.set(x + i, y + j, c, color);
   }
-  flush();
-  return out;
-}
-
-/* ---------- 文件卡片 ---------- */
-function fileIconFor(lang){
-  if(['js','javascript','jsx','ts','typescript','tsx','mjs','vue','svelte'].includes(lang)) return '📜';
-  if(['css','scss','less'].includes(lang)) return '🎨';
-  if(['json','yaml','yml','xml','toml','ini'].includes(lang)) return '⚙️';
-  if(['py','python'].includes(lang)) return '🐍';
-  if(['md','markdown','mdx'].includes(lang)) return '📝';
-  if(['sql'].includes(lang)) return '🗃️';
-  if(['sh','bash','shell','zsh','powershell','ps1'].includes(lang)) return '💻';
-  if(['java','kotlin','scala'].includes(lang)) return '☕';
-  if(['go','golang'].includes(lang)) return '🐹';
-  if(['rust','rs'].includes(lang)) return '🦀';
-  return '📄';
-}
-
-function guessFilename(lang, code, isHtml){
-  // 代码里显式声明的文件名
-  const m = code.match(/^\s*(?:\/\/|#|\/\*|<!--)\s*(?:file(?:name)?\s*[:：]\s*)?([\w\-.]+\.(?:html?|css|js|jsx|ts|tsx|py|java|go|rs|cpp|c|cs|php|rb|sh|json|yml|yaml|md|vue|sql|kt|swift|dart|lua))\b/i);
-  if(m) return m[1];
-
-  if(isHtml){
-    const t = code.match(/<title>([^<]{1,40})<\/title>/i);
-    if(t){
-      const clean = t[1].trim().replace(/[\\/:*?"<>|]/g, '');
-      if(clean) return clean + '.html';
-    }
-    return 'index.html';
-  }
-  const l = (lang || '').toLowerCase();
-  const ext = EXT_MAP[l] || (l ? l.replace(/[^a-z0-9]/g, '') : 'txt') || 'txt';
-  return 'code.' + ext;
-}
-
-function renderFileCard(block, key){
-  const rawLang = (block.lang || '').trim().toLowerCase();
-  const code = block.code || '';
-  const isHtml = rawLang === 'html' || rawLang === 'htm'
-              || (!rawLang && /^\s*(<!DOCTYPE\s+html|<html[\s>])/i.test(code));
-  const langKey = rawLang || (isHtml ? 'html' : '');
-  const label = LANG_NAMES[langKey] || (langKey ? langKey.toUpperCase() : '纯文本');
-  const filename = guessFilename(langKey, code, isHtml);
-  const lineCount = code.split('\n').length;
-  const sizeStr = formatBytes(new Blob([code]).size);
-  const collapsible = lineCount > 18;
-  const isExpanded = expandedCards.has(key) || !collapsible;
-  const isPreviewing = isHtml && previewCards.has(key);
-
-  const previewBtn = isHtml
-    ? '<button class="fc-btn" data-act="preview" data-key="' + key + '">' +
-        (isPreviewing ? '关闭预览' : '预览') + '</button>'
-    : '';
-
-  return '' +
-  '<div class="file-card" data-key="' + key + '">' +
-    '<div class="file-head">' +
-      '<div class="file-icon">' + (isHtml ? '🌐' : fileIconFor(langKey)) + '</div>' +
-      '<div class="file-info">' +
-        '<div class="file-name">' + escapeHtml(filename) + '</div>' +
-        '<div class="file-sub">' + escapeHtml(label) + ' · ' + lineCount + ' 行 · ' + sizeStr + '</div>' +
-      '</div>' +
-      '<div class="file-actions">' +
-        previewBtn +
-        '<button class="fc-btn" data-act="copy" data-key="' + key + '">复制</button>' +
-        '<button class="fc-btn" data-act="download" data-key="' + key + '">下载</button>' +
-      '</div>' +
-    '</div>' +
-    '<div class="file-body' + (isExpanded ? ' expanded' : '') + '">' +
-      '<pre><code>' + escapeHtml(code) + '</code></pre>' +
-    '</div>' +
-    (collapsible
-      ? '<button class="file-toggle" data-act="toggle" data-key="' + key + '">' +
-          (isExpanded ? '收起 ▲' : '展开全部 ▼') + '</button>'
-      : '') +
-    (isPreviewing
-      ? '<div class="file-preview"><iframe sandbox="allow-scripts allow-forms allow-modals allow-popups" srcdoc="' +
-          escapeHtml(code) + '"></iframe></div>'
-      : '') +
-  '</div>';
-}
-
-function renderMarkdown(md, msgKey){
-  if(!md) return '';
-  const parts = splitFences(md);
-  let html = '';
-  let codeIdx = 0;
-  for(let i = 0; i < parts.length; i++){
-    const p = parts[i];
-    if(p.type === 'code'){
-      html += renderFileCard(p, msgKey + ':c' + (codeIdx++));
-    }else{
-      html += renderText(p.text);
+  // 用 ┌ ┐ └ ┘ ─ │ 画边框（可带内嵌标题）
+  box(x, y, w, h, color, title, titleColor) {
+    const x1 = x + w - 1, y1 = y + h - 1;
+    this.hline(x + 1, x1 - 1, y, '─', color);
+    this.hline(x + 1, x1 - 1, y1, '─', color);
+    this.vline(x, y + 1, y1 - 1, '│', color);
+    this.vline(x1, y + 1, y1 - 1, '│', color);
+    this.set(x, y, '┌', color); this.set(x1, y, '┐', color);
+    this.set(x, y1, '└', color); this.set(x1, y1, '┘', color);
+    if (title) {
+      const t = '┤ ' + title + ' ├';
+      const tx = x + Math.max(2, Math.floor((w - strW(t)) / 2));
+      // 先擦掉底下的 ─，否则标题里的空格会漏出边框，显示成 ┤─PREVIEW─├
+      for (let i = 0; i < strW(t); i++) this.erase(tx + i, y);
+      this.text(tx, y, t, titleColor || color);
     }
   }
-  return html;
 }
 
-/* ============================================================
- *  消息渲染
- * ============================================================ */
-function buildMessageEl(msg, idx, convId){
-  const wrap = document.createElement('div');
-  wrap.className = 'msg ' + msg.role;
-  wrap.dataset.idx = idx;
-
-  const avatar = document.createElement('div');
-  avatar.className = 'avatar';
-  avatar.textContent = msg.role === 'user' ? '你' : 'AI';
-
-  const content = document.createElement('div');
-  content.className = 'content';
-
-  if(msg.role === 'user'){
-    const bubble = document.createElement('div');
-    bubble.className = 'bubble';
-    bubble.textContent = msg.content;
-    content.appendChild(bubble);
-  }else{
-    const md = document.createElement('div');
-    md.className = 'md';
-    md.innerHTML = renderMarkdown(msg.content, convId + ':' + idx);
-    content.appendChild(md);
-
-    const actions = document.createElement('div');
-    actions.className = 'msg-actions';
-    actions.innerHTML =
-      '<button data-act="copy-msg">复制</button>' +
-      '<button data-act="regen">重新生成</button>';
-    content.appendChild(actions);
-  }
-
-  wrap.appendChild(avatar);
-  wrap.appendChild(content);
-  return wrap;
-}
-
-function buildEmptyState(){
-  const div = document.createElement('div');
-  div.className = 'empty';
-  div.innerHTML =
-    '<div class="empty-logo">✦</div>' +
-    '<h2>有什么可以帮你的？</h2>' +
-    '<p>代码会以「文件卡片」形式展示，长内容自动折叠，<br>不再需要滑动很久才能回到顶部</p>' +
-    '<div class="chips">' +
-      '<button class="chip" data-prompt="用 HTML + CSS + JS 写一个漂亮的时钟页面">写一个 HTML 时钟</button>' +
-      '<button class="chip" data-prompt="用 Python 写一个快速排序，并解释思路">Python 快速排序</button>' +
-      '<button class="chip" data-prompt="用 HTML 写一个完整的待办事项应用（单文件）">待办事项应用</button>' +
-      '<button class="chip" data-prompt="解释一下 JavaScript 中的闭包，举个例子">解释闭包</button>' +
-    '</div>';
-  return div;
-}
-
-function scrollToBottom(){
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-}
-function nearBottom(){
-  return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 130;
-}
-
-function renderMessages(){
-  const conv = getCurrent();
-  messagesEl.innerHTML = '';
-  if(!conv || conv.messages.length === 0){
-    messagesEl.appendChild(buildEmptyState());
-    topbarTitle.textContent = conv ? (conv.title || '新对话') : '新对话';
-    return;
-  }
-  topbarTitle.textContent = conv.title || '新对话';
-  conv.messages.forEach((m, i) => {
-    messagesEl.appendChild(buildMessageEl(m, i, conv.id));
-  });
-  scrollToBottom();
-}
-
-function appendMessageEl(msg, idx){
-  const empty = messagesEl.querySelector('.empty');
-  if(empty) empty.remove();
-  const conv = getCurrent();
-  const node = buildMessageEl(msg, idx, conv.id);
-  messagesEl.appendChild(node);
-  return node;
-}
-
-/* ============================================================
- *  会话列表
- * ============================================================ */
-function renderConversationList(){
-  convListEl.innerHTML = '';
-  state.conversations.forEach(c => {
-    const item = document.createElement('div');
-    item.className = 'conv-item' + (c.id === state.currentId ? ' active' : '');
-    item.dataset.id = c.id;
-
-    const title = document.createElement('span');
-    title.className = 'conv-title';
-    title.textContent = c.title || '新对话';
-
-    const del = document.createElement('button');
-    del.className = 'conv-del';
-    del.textContent = '×';
-    del.title = '删除';
-
-    item.appendChild(title);
-    item.appendChild(del);
-
-    item.addEventListener('click', (e) => {
-      if(e.target === del){
-        e.stopPropagation();
-        deleteConversation(c.id);
-        return;
-      }
-      if(c.id !== state.currentId){
-        if(generating) stopGeneration();
-        state.currentId = c.id;
-        saveState();
-        renderConversationList();
-        renderMessages();
-      }
-      closeSidebarMobile();
-    });
-
-    convListEl.appendChild(item);
-  });
-}
-
-function createConversation(shouldRender){
-  const conv = { id: uid(), title:'新对话', messages: [], createdAt: Date.now() };
-  state.conversations.unshift(conv);
-  state.currentId = conv.id;
-  saveState();
-  if(shouldRender !== false){
-    renderConversationList();
-    renderMessages();
-    inputEl.focus();
-  }
-  return conv;
-}
-
-function deleteConversation(id){
-  const idx = state.conversations.findIndex(c => c.id === id);
-  if(idx === -1) return;
-  state.conversations.splice(idx, 1);
-  if(state.currentId === id){
-    if(!state.conversations.length) createConversation(false);
-    else state.currentId = state.conversations[0].id;
-  }
-  saveState();
-  renderConversationList();
-  renderMessages();
-}
-
-/* ============================================================
- *  发送 / 生成
- * ============================================================ */
-function setSendingUI(active){
-  sendBtn.style.display = active ? 'none' : 'flex';
-  stopBtn.style.display = active ? 'flex' : 'none';
-}
-
-function showError(message){
-  const div = document.createElement('div');
-  div.className = 'error-box';
-  div.innerHTML = '<strong>请求出错</strong><div>' + escapeHtml(message) + '</div>';
-  messagesEl.appendChild(div);
-  scrollToBottom();
-}
-
-async function sendMessage(){
-  if(generating) return;
-  const text = inputEl.value.trim();
-  if(!text) return;
-
-  let conv = getCurrent();
-  if(!conv){ conv = createConversation(false); }
-
-  // 首条消息 → 用内容做标题
-  if(conv.messages.length === 0){
-    conv.title = text.replace(/\s+/g, ' ').slice(0, 22) + (text.length > 22 ? '…' : '');
-  }
-
-  conv.messages.push({ role:'user', content: text });
-  inputEl.value = '';
-  autoResize();
-
-  appendMessageEl({ role:'user', content: text }, conv.messages.length - 1);
-  scrollToBottom();
-  topbarTitle.textContent = conv.title || '新对话';
-  saveState();
-  renderConversationList();
-
-  await generate();
-}
-
-async function generate(){
-  const conv = getCurrent();
-  if(!conv) return;
-
-  const settings = getSettings();
-  if(!settings.apiKey){
-    toast('请先在设置中填写 API Key');
-    openSettings();
-    return;
-  }
-
-  const msgIndex = conv.messages.length;
-  const assistantMsg = { role:'assistant', content:'' };
-  conv.messages.push(assistantMsg);
-
-  const msgEl = appendMessageEl(assistantMsg, msgIndex);
-  const mdEl = msgEl.querySelector('.md');
-  const msgKey = conv.id + ':' + msgIndex;
-  scrollToBottom();
-
-  generating = true;
-  setSendingUI(true);
-  abortController = new AbortController();
-
-  let acc = '';
-  let rafId = null;
-
-  const scheduleRender = () => {
-    if(rafId) return;
-    rafId = requestAnimationFrame(() => {
-      rafId = null;
-      mdEl.innerHTML = renderMarkdown(acc, msgKey) + '<span class="cursor"></span>';
-      if(nearBottom()) scrollToBottom();
-    });
-  };
-
-  const history = conv.messages.slice(0, -1).map(m => ({ role: m.role, content: m.content }));
-  const payload = {
-    model: settings.model,
-    messages: settings.systemPrompt
-      ? [{ role:'system', content: settings.systemPrompt }].concat(history)
-      : history,
-    stream: true
-  };
-  const t = parseFloat(settings.temperature);
-  if(!isNaN(t)) payload.temperature = t;
-
-  try{
-    const res = await fetch(joinUrl(settings.baseUrl, '/chat/completions'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + settings.apiKey
-      },
-      body: JSON.stringify(payload),
-      signal: abortController.signal
-    });
-
-    if(!res.ok){
-      let detail = '';
-      try{
-        const j = await res.json();
-        detail = (j && j.error && j.error.message) ? j.error.message : JSON.stringify(j);
-      }catch(e){
-        try{ detail = await res.text(); }catch(e2){ detail = ''; }
-      }
-      throw new Error('HTTP ' + res.status + ' · ' + String(detail).slice(0, 300));
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-    let buffer = '';
-
-    while(true){
-      const { done, value } = await reader.read();
-      if(done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for(let k = 0; k < lines.length; k++){
-        const line = lines[k].trim();
-        if(!line || line.charAt(0) === ':') continue;
-        if(line.indexOf('data:') !== 0) continue;
-
-        const data = line.slice(5).trim();
-        if(data === '[DONE]') continue;
-
-        let json;
-        try{ json = JSON.parse(data); }catch(e){ continue; }
-
-        const choice = json.choices && json.choices[0];
-        if(!choice) continue;
-        const delta = choice.delta ? choice.delta.content : (choice.message ? choice.message.content : '');
-        if(typeof delta === 'string' && delta){
-          acc += delta;
-          scheduleRender();
+/* ---------------------------------------------------------------------------
+   [4] GlowEngine —— 荧光溢出（halation）
+   真正的"辉光"分两层：
+     a) 这里：亮字符周围的空格里补上极暗的 '.'，模拟荧光粉向邻近像素的物理溢出；
+     b) compositeToMain：把整幅画面缩小再放大回来做真 Bloom。
+   性能权衡：逐格扫描 200x72=14400 格太贵，所以按 4x4 区块抽样，
+   单帧补字上限 900（约占总格数 6%），视觉上足够，fillText 调用量可控。
+   --------------------------------------------------------------------------- */
+const HALO_MAX = 900;
+class GlowEngine {
+  static process(frame) {
+    const cols = frame.cols, rows = frame.rows;
+    const C = CONFIG.colors;
+    let added = 0;
+    // 区块步进（随网格尺寸自适应，保证大网格也不爆量）
+    const B = cols > 160 ? 4 : 3;
+    for (let by = 1; by < rows - 1 && added < HALO_MAX; by += B) {
+      for (let bx = 1; bx < cols - 1 && added < HALO_MAX; bx += B) {
+        // 统计区块内的亮字符（密度 >= #，即 0.77 以上）
+        let bright = 0;
+        for (let y = by; y < by + B && y < rows; y++) {
+          const row = y * cols;
+          for (let x = bx; x < bx + B && x < cols; x++) {
+            const c = frame.ch[row + x];
+            if (c !== ' ' && c !== '\u0000' && lumOf(c) >= 0.77) { bright++; }
+          }
+        }
+        if (bright < 2) continue;
+        // 只给"紧贴亮字符"的空格补光晕：真实的荧光溢出只有 1 格左右，
+        // 铺满整个 4x4 区块会把终端读数区（进度条、百分比）糊脏。
+        for (let y = by; y < by + B && y < rows - 1 && added < HALO_MAX; y++) {
+          const row = y * cols;
+          for (let x = bx; x < bx + B && x < cols - 1 && added < HALO_MAX; x++) {
+            if (frame.ch[row + x] !== ' ') continue;
+            const l = lumOf(frame.ch[row + x - 1]), r = lumOf(frame.ch[row + x + 1]);
+            const u = lumOf(frame.ch[row + x - cols]), d = lumOf(frame.ch[row + x + cols]);
+            if (l < 0.77 && r < 0.77 && u < 0.77 && d < 0.77) continue;
+            frame.ch[row + x] = '.';
+            frame.co[row + x] = C.glowFar;
+            added++;
+          }
         }
       }
     }
+    return frame;
+  }
+}
 
-    if(rafId){ cancelAnimationFrame(rafId); rafId = null; }
+/* ---------------------------------------------------------------------------
+   [5] 画布 / 渲染上下文
+   双 Canvas 架构：
+     offCanvas（隐藏）—— 逐字符 fillText，分辨率 = 网格列数x行数 x 每格像素
+     mainCanvas（可见）—— 合成最终画面，分辨率 = 窗口尺寸 x DPR
+   --------------------------------------------------------------------------- */
+const mainCanvas = document.getElementById('mainCanvas');
+const offCanvas = document.getElementById('offCanvas');
+const mainCtx = mainCanvas.getContext('2d');
+const offCtx = offCanvas.getContext('2d');
+const stageEl = document.getElementById('stage');
+const inputEl = document.getElementById('userInput');
 
-    if(!acc.trim()){
-      acc = '（模型没有返回内容）';
-    }
-    assistantMsg.content = acc;
-    mdEl.innerHTML = renderMarkdown(acc, msgKey);
-    if(nearBottom()) scrollToBottom();
+// 合成用的离屏缓冲：两层 Bloom + 一层色偏
+const bloomA = document.createElement('canvas');   // 1/4 缩放的廉价模糊（核心辉光）
+const bloomB = document.createElement('canvas');   // 1/12 缩放（大范围光雾）
+const tintCanvas = document.createElement('canvas'); // RGB 分离用的着色层
+const bloomACtx = bloomA.getContext('2d');
+const bloomBCtx = bloomB.getContext('2d');
+const tintCtx = tintCanvas.getContext('2d');
+const scanCanvas = document.createElement('canvas');  // 扫描线图案
+const scanCtx = scanCanvas.getContext('2d');
 
-  }catch(err){
-    if(rafId){ cancelAnimationFrame(rafId); rafId = null; }
+let DPR = 1;
+let FRAME = null;              // 复用的帧缓冲（热路径不新建对象）
+let scanPattern = null, scanDirty = true;
+let vignette = null, vignetteDirty = true;
 
-    if(err && err.name === 'AbortError'){
-      if(acc.trim()){
-        assistantMsg.content = acc;
-        mdEl.innerHTML = renderMarkdown(acc, msgKey) +
-          '<p style="color:#8a8f98;font-size:13px;">（已停止生成）</p>';
-      }else{
-        conv.messages.pop();
-        msgEl.remove();
+/* 帧级特效状态（故障 / 闪白 / 淡出 / 抖动 / 色偏染色） */
+const FX = {
+  t: 0,                 // 本阶段的累计秒数（只用于特效相位，不用于 MV 时间轴）
+  glitch: 0,            // 当前故障剩余时长
+  nextGlitch: 4,        // 下次随机故障的时间点
+  flash: 0,             // 白闪强度 0..1
+  fade: 0,              // 黑场强度 0..1
+  shake: 0,             // 抖动强度 0..1
+  tintColor: null,      // 染色（场景红闪）
+  tintAlpha: 0,
+  scanOffset: 0
+};
+function triggerGlitch(dur) { FX.glitch = Math.max(FX.glitch, dur || 0.15); }
+function triggerFlash(a) { FX.flash = Math.max(FX.flash, a === undefined ? 1 : a); }
+function triggerTint(color, alpha) { FX.tintColor = color; FX.tintAlpha = alpha; }
+
+// 特效推进 + 随机故障调度（常态每 glitchInterval 秒一次，持续 0.15s）
+function updateFX(dt) {
+  FX.t += dt;
+  FX.scanOffset = (FX.scanOffset + 30 * dt) % 4;      // 扫描线每秒下滑 30px
+  FX.flash = Math.max(0, FX.flash - dt * 3.2);
+  FX.fade = Math.max(0, FX.fade - dt * 1.4);
+  FX.shake = Math.max(0, FX.shake - dt * 2.6);
+  FX.tintAlpha = Math.max(0, FX.tintAlpha - dt * 4.5);
+  if (FX.glitch > 0) FX.glitch = Math.max(0, FX.glitch - dt);
+  else if (FX.t > FX.nextGlitch) {
+    triggerGlitch(0.15);
+    FX.nextGlitch = FX.t + CONFIG.glitchInterval * (0.55 + Math.random() * 0.9);
+  }
+}
+
+/* 网格初始化：任何网格尺寸变化（含开发者面板改 COLS/ROWS）都要走这里 */
+function initGrid() {
+  offCanvas.width = Math.max(64, Math.round(CONFIG.gridCols * CONFIG.cellW));
+  offCanvas.height = Math.max(32, Math.round(CONFIG.gridRows * CONFIG.cellH));
+  // 问题 1：模糊半径降为原来的 0.6 倍 → 下采样倍数由 4 / 12 收紧到 2.4 / 7.2
+  bloomA.width = Math.max(2, Math.round(offCanvas.width / 2.4));
+  bloomA.height = Math.max(2, Math.round(offCanvas.height / 2.4));
+  bloomB.width = Math.max(2, Math.round(offCanvas.width / 7.2));
+  bloomB.height = Math.max(2, Math.round(offCanvas.height / 7.2));
+  tintCanvas.width = offCanvas.width;
+  tintCanvas.height = offCanvas.height;
+  FRAME = new Frame(CONFIG.gridCols, CONFIG.gridRows);
+  calibrateFont();
+  scanDirty = true;
+}
+
+/* 字体标定：不同平台的等宽字体推进宽度不一样（Courier New 0.600em / Consolas 0.55em /
+   Menlo 0.6em）。这里实测 10 个 M 的宽度，反推字号，让"1 字符 = 1 格"在任何机器上都成立，
+   否则整行 ASCII 文本会随字数累积偏移。缩放比限制在 0.6~1.7 倍，避免字体解析失败时炸掉。 */
+function calibrateFont() {
+  try {
+    offCtx.font = CONFIG.fontSize + 'px ' + CONFIG.fontFamily;
+    const w = offCtx.measureText('MMMMMMMMMM').width / 10;
+    if (!(w > 0) || !isFinite(w)) return;
+    const target = offCanvas.width / CONFIG.gridCols;
+    CONFIG.fontSize = clamp(CONFIG.fontSize * target / w, CONFIG.fontSize * 0.6, CONFIG.fontSize * 1.7);
+  } catch (e) { /* 拿不到度量就沿用默认字号 */ }
+}
+
+/* 窗口尺寸变化：只重设 mainCanvas 后备存储，不动网格 */
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);   // 上限 2：CRT 画面不需要 3x 像素
+  const vw = window.innerWidth || document.documentElement.clientWidth || 1280;
+  const vh = window.innerHeight || document.documentElement.clientHeight || 720;
+  mainCanvas.width = Math.max(320, Math.round(vw * DPR));
+  mainCanvas.height = Math.max(240, Math.round(vh * DPR));
+  mainCanvas.style.width = vw + 'px';
+  mainCanvas.style.height = vh + 'px';
+  vignetteDirty = true;
+  layoutInputBox();     // HTML 输入框要重新对齐到网格
+}
+
+/* 画面区域：按 offCanvas 宽高比做 letterbox 居中 */
+function viewRect() {
+  const vw = mainCanvas.width / DPR, vh = mainCanvas.height / DPR;
+  const s = Math.min(vw / offCanvas.width, vh / offCanvas.height);
+  const dw = offCanvas.width * s, dh = offCanvas.height * s;
+  return { vw, vh, s, dx: (vw - dw) / 2, dy: (vh - dh) / 2, dw, dh };
+}
+
+/* 扫描线图案：每 2 像素一条半透明黑线，第二条更淡（隔行扫描质感） */
+function buildScanPattern() {
+  scanCanvas.width = 8; scanCanvas.height = 4;
+  const a = clamp(CONFIG.scanlineAlpha, 0, 0.95);
+  scanCtx.clearRect(0, 0, 8, 4);
+  scanCtx.fillStyle = 'rgba(0,0,0,' + a.toFixed(3) + ')';
+  scanCtx.fillRect(0, 0, 8, 1);
+  scanCtx.fillStyle = 'rgba(0,0,0,' + (a * 0.5).toFixed(3) + ')';
+  scanCtx.fillRect(0, 2, 8, 1);
+  scanPattern = mainCtx.createPattern(scanCanvas, 'repeat');
+  scanDirty = false;
+}
+
+/* 暗角：中心透明 → 四周黑，强度由 STYLE.effects.vignetteAlpha 控制 */
+function buildVignette() {
+  const vw = mainCanvas.width / DPR, vh = mainCanvas.height / DPR;
+  vignette = mainCtx.createRadialGradient(
+    vw / 2, vh / 2, Math.min(vw, vh) * 0.26,
+    vw / 2, vh / 2, Math.max(vw, vh) * 0.74
+  );
+  vignette.addColorStop(0, 'rgba(0,0,0,0)');
+  vignette.addColorStop(0.62, 'rgba(0,0,0,0.30)');
+  vignette.addColorStop(1, 'rgba(0,0,0,1)');
+  vignetteDirty = false;
+}
+
+/* ---------------------------------------------------------------------------
+   [6] drawOffCanvas —— 把 Frame 画到离屏画布
+   关键优化：同一行里"颜色相同且连续"的字符合并成一次 fillText。
+   200x72 全屏最多 14400 格，实际非空格通常 2000~5000，
+   合并后 fillText 调用约 300~900 次/帧，这是 60FPS 的前提。
+   shadowBlur 只给密度 >= '#' 的亮字符，并且有帧预算（见 CONFIG.glowBudget）：
+   辉光越强越卡，预算机制保证弱机上自动降级而不是掉帧。
+   --------------------------------------------------------------------------- */
+const RUNBUF = [];
+function drawOffCanvas(frame) {
+  const c = offCtx, W = offCanvas.width, H = offCanvas.height;
+  const cw = W / frame.cols, chh = H / frame.rows;
+  const cols = frame.cols, rows = frame.rows;
+  const ch = frame.ch, co = frame.co;
+
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalCompositeOperation = 'source-over';
+  c.globalAlpha = 1;
+  c.shadowBlur = 0;
+  c.fillStyle = CONFIG.colors.black || '#000000';
+  c.fillRect(0, 0, W, H);                       // 底色 = 当前风格的"黑"
+  c.font = CONFIG.fontSize + 'px ' + CONFIG.fontFamily;
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+
+  let brightCount = 0;
+
+  // ---- 第一遍：常规字符（按行做同色连续段批处理）----
+  for (let y = 0; y < rows; y++) {
+    const row = y * cols;
+    const cy = (y + 0.5) * chh;
+    let runColor = null, runStart = 0, runLen = 0;
+    for (let x = 0; x < cols; x++) {
+      const cc = ch[row + x];
+      const col = co[row + x];
+      const isBlank = (cc === ' ' || cc === '\u0000');
+      const wide = (!isBlank && charW(cc) === 2);
+      // 非 ASCII 可见字符（─ │ ┌ █ ░ ♥ ∞ 中文…）一律单独居中绘制：
+      // 这些字形不在 Courier New 里，浏览器会走字体回退，推进宽度未必等于 cellW，
+      // 一旦混进"同色连续段"就会把整段推歪。单格 fillText 可彻底规避，
+      // 代价是每帧多几百次绘制，相对 14400 格上限仍然很低。
+      const solo = (!isBlank && !wide && !(cc >= '!' && cc <= '~'));
+      if (!isBlank && lumOf(cc) >= 0.77) brightCount++;
+
+      if (isBlank || wide || solo || col !== runColor) {
+        if (runLen > 0) {                       // 冲刷上一段
+          RUNBUF.length = runLen;
+          c.fillStyle = runColor;
+          c.fillText(RUNBUF.join(''), (runStart + runLen * 0.5) * cw, cy);
+          runLen = 0;
+        }
+        if (wide) {                             // 全角字符单独居中在 2 格上
+          c.fillStyle = col;
+          c.fillText(cc, (x + 1) * cw, cy);
+          runColor = null;
+          continue;
+        }
+        if (solo) {                              // 制表符 / 方块 / 符号：单独居中在 1 格上
+          c.fillStyle = col;
+          c.fillText(cc, (x + 0.5) * cw, cy);
+          runColor = null;
+          continue;
+        }
+        if (isBlank) { runColor = null; continue; }
+        runColor = col; runStart = x; RUNBUF[0] = cc; runLen = 1;
+      } else {
+        RUNBUF[runLen++] = cc;                  // 同色连续字符并入本段
       }
-    }else{
-      conv.messages.pop();
-      msgEl.remove();
-      showError((err && err.message) ? err.message : String(err));
     }
-  }finally{
-    generating = false;
-    abortController = null;
-    setSendingUI(false);
-    saveState();
-    renderConversationList();
+    if (runLen > 0) {
+      RUNBUF.length = runLen;
+      c.fillStyle = runColor;
+      c.fillText(RUNBUF.join(''), (runStart + runLen * 0.5) * cw, cy);
+    }
+  }
+
+  // ---- 第二遍：亮字符加 shadowBlur，形成"荧光核心" ----
+  const budget = Math.max(60, CONFIG.glowBudget | 0);
+  const glow = CONFIG.glowStrength * CONFIG.glowBoost;
+  if (brightCount > 0 && glow > 0.02) {
+    const stride = brightCount > budget ? Math.ceil(brightCount / budget) : 1;
+    // 问题 1：光晕半径同样 ×0.6，亮字符周围只留一圈柔光，不再糊掉字形
+    c.shadowBlur = Math.max(1, CONFIG.bloomRadius * 0.6 * glow * 1.7);
+    let seen = 0, lastColor = null;
+    for (let y = 0; y < rows; y++) {
+      const row = y * cols, cy = (y + 0.5) * chh;
+      for (let x = 0; x < cols; x++) {
+        const cc = ch[row + x];
+        if (cc === ' ' || cc === '\u0000') continue;
+        if (lumOf(cc) < 0.77 && frame.gl[row + x] === 0) continue;
+        seen++;
+        if (stride > 1 && (seen % stride) !== 0) continue;   // 均匀抽稀，避免只有上半屏有辉光
+        const col = co[row + x];
+        if (col !== lastColor) { c.shadowColor = col; lastColor = col; }
+        c.fillStyle = col;
+        c.fillText(cc, (x + 0.5) * cw, cy);
+      }
+    }
+    c.shadowBlur = 0;
+  }
+}
+
+/* 着色层：把单色画面乘上一个颜色，再用 destination-in 抠回字形轮廓。
+   用于故障时的 RGB 分离（红/青偏移）。 */
+function drawTinted(ctx, color, ox, alpha, dx, dy, dw, dh) {
+  const t = tintCtx;
+  t.setTransform(1, 0, 0, 1, 0, 0);
+  t.globalCompositeOperation = 'source-over';
+  t.globalAlpha = 1;
+  t.clearRect(0, 0, tintCanvas.width, tintCanvas.height);
+  t.drawImage(offCanvas, 0, 0);
+  t.globalCompositeOperation = 'multiply';
+  t.fillStyle = color;
+  t.fillRect(0, 0, tintCanvas.width, tintCanvas.height);
+  t.globalCompositeOperation = 'destination-in';
+  t.drawImage(offCanvas, 0, 0);                 // 只保留字形（纯黑区域乘完仍是黑，加色时不可见）
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(tintCanvas, dx + ox, dy, dw, dh);
+}
+
+/* ---------------------------------------------------------------------------
+   [7] compositeToMain —— 合成最终画面（问题 1 修改点：整体提清晰度）
+   顺序：清晰层 → 双层 Bloom(lighter) → 锐化(overlay) → RGB 分离 → 扫描线 → 暗角 → 闪白/黑场
+   清晰度相关的四处调整：
+     a) Bloom 的模糊半径 ×0.6：离屏模糊缓冲从 1/4、1/12 改为 1/2.4、1/7.2
+        （下采样倍数越小，放大回来的模糊半径越小）；
+     b) 清晰层 globalAlpha 固定 1.0，两层模糊合计只有 0.35（原来 0.52）；
+     c) drawOffCanvas 里亮字符的 shadowBlur 半径同样 ×0.6；
+     d) 最后再以 overlay 混合、0.15 透明度叠一层原图，做轻微锐化（提升对比边缘）。
+   --------------------------------------------------------------------------- */
+function compositeToMain() {
+  const ctx = mainCtx;
+  const v = viewRect();
+  const C = CONFIG.colors;
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = C.black || '#000000';         // letterbox 区域（机壳）
+  ctx.fillRect(0, 0, v.vw, v.vh);
+
+  let dx = v.dx, dy = v.dy;
+  if (FX.shake > 0.001) {                       // 故障抖动
+    dy += (hash11(FX.t * 61.7) - 0.5) * FX.shake * 14;
+    dx += (hash11(FX.t * 97.3 + 5.1) - 0.5) * FX.shake * 8;
+  }
+
+  // 1) 清晰层：完全不透明，保证字符主体锐利
+  ctx.imageSmoothingEnabled = true;
+  ctx.globalAlpha = 1.0;
+  ctx.drawImage(offCanvas, dx, dy, v.dw, v.dh);
+
+  // 2) Bloom：缩到 1/2.4 与 1/7.2 再放大回来（半径已降为原来的 0.6 倍），
+  //    两层合计透明度 0.35，只做柔和扩散，不再糊屏。
+  const glow = CONFIG.glowStrength * CONFIG.glowBoost;
+  if (glow > 0.02) {
+    const flick = 1 + (hash11(FX.t * 13.3) - 0.5) * 0.05;   // 荧光管轻微亮度抖动
+    bloomACtx.globalCompositeOperation = 'copy';
+    bloomACtx.drawImage(offCanvas, 0, 0, bloomA.width, bloomA.height);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = clamp(0.22 * glow * flick, 0, 0.6);
+    ctx.drawImage(bloomA, dx, dy, v.dw, v.dh);
+
+    bloomBCtx.globalCompositeOperation = 'copy';
+    bloomBCtx.drawImage(offCanvas, 0, 0, bloomB.width, bloomB.height);
+    ctx.globalAlpha = clamp(0.13 * glow * flick, 0, 0.4);
+    ctx.drawImage(bloomB, dx, dy, v.dw, v.dh);
+  }
+
+  // 3) 轻微锐化：以 overlay 再叠一层原图，把被 Bloom 抬起来的暗部压回去
+  //    （放在扫描线/暗角之前，避免把 CRT 覆盖层一起提亮）
+  ctx.globalCompositeOperation = 'overlay';
+  ctx.globalAlpha = 0.15;
+  ctx.drawImage(offCanvas, dx, dy, v.dw, v.dh);
+
+  // 4) RGB 分离：红用 alert 色、另一路用 bright 色（不引入风格外颜色；
+  //    纯黑白风格下 chromaticAberration = 0，自动退化为无色偏）
+  if (FX.glitch > 0 && CONFIG.chromaticAberration > 0.2) {
+    const ab = CONFIG.chromaticAberration * (1 + FX.glitch * 1.5);
+    drawTinted(ctx, C.alert, -ab, 0.55, dx, dy, v.dw, v.dh);
+    drawTinted(ctx, C.bright, ab, 0.45, dx, dy, v.dw, v.dh);
+  }
+
+  // 5) 扫描线（缓慢下滑）
+  if (scanDirty || !scanPattern) buildScanPattern();
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  ctx.save();
+  ctx.translate(0, FX.scanOffset);
+  ctx.fillStyle = scanPattern;
+  ctx.fillRect(0, -FX.scanOffset, v.vw, v.vh + 8);
+  ctx.restore();
+
+  // 6) 暗角
+  if (vignetteDirty || !vignette) buildVignette();
+  ctx.globalAlpha = clamp(CONFIG.vignetteAlpha, 0, 1);
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, v.vw, v.vh);
+  ctx.globalAlpha = 1;
+
+  // 7) 场景染色（故障红闪等）
+  if (FX.tintAlpha > 0.001 && FX.tintColor) {
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = clamp(FX.tintAlpha, 0, 1);
+    ctx.fillStyle = FX.tintColor;
+    ctx.fillRect(0, 0, v.vw, v.vh);
+  }
+
+  // 8) 白闪
+  if (FX.flash > 0.001) {
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = clamp(FX.flash, 0, 1);
+    ctx.fillStyle = C.pure;
+    ctx.fillRect(0, 0, v.vw, v.vh);
+  }
+
+  // 9) 黑场（阶段切换的淡出）
+  ctx.globalCompositeOperation = 'source-over';
+  if (FX.fade > 0.001) {
+    ctx.globalAlpha = clamp(FX.fade, 0, 1);
+    ctx.fillStyle = C.black || '#000000';
+    ctx.fillRect(0, 0, v.vw, v.vh);
+  }
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+/* 把 HTML 输入框对齐到指定的网格坐标（对话阶段的终端输入行） */
+const INPUT_GRID = { x: 30, y: 30, w: 140 };
+function layoutInputBox() {
+  const v = viewRect();
+  const cw = v.dw / CONFIG.gridCols, chh = v.dh / CONFIG.gridRows;
+  inputEl.style.left = (v.dx + INPUT_GRID.x * cw) + 'px';
+  inputEl.style.top = (v.dy + (INPUT_GRID.y - 0.2) * chh) + 'px';
+  inputEl.style.width = (INPUT_GRID.w * cw) + 'px';
+  inputEl.style.height = (chh * 1.5) + 'px';
+  inputEl.style.fontSize = (CONFIG.fontSize * (v.dw / CONFIG.gridCols) / 7.2) + 'px';
+  inputEl.style.color = CONFIG.colors.bright || '#ffffff';
+  inputEl.style.borderBottomColor = CONFIG.colors.bright || '#ffffff';
+}
+function showInputBox(on) {
+  if (on) { layoutInputBox(); inputEl.style.display = 'block'; }
+  else { inputEl.style.display = 'none'; inputEl.value = ''; }
+}
+
+/* ---------------------------------------------------------------------------
+   [8] 歌词数据（来自 world.execute (me) ; - Mili.lrc 的真实时间戳）
+   每项 [秒, 英文, 中文]。运行时按 {t: 秒/audio.duration} 归一化成百分比时间轴，
+   这样"所有歌词时间点都按占音频总时长的百分比定义"这条约束在数据层就成立了，
+   同时换任何一版音频（时长不同）都不用改数据。
+   --------------------------------------------------------------------------- */
+const LRC = [
+  [0.100, 'Switch on the power line', '接通电源'],
+  [1.740, 'Remember to put on', '记得戴上'],
+  [2.920, 'PROTECTION', '防护'],
+  [3.873, 'Lay down your pieces', '放下你的棋子'],
+  [5.491, "And let's begin", '让我们开始'],
+  [6.380, 'OBJECT CREATION', '对象创建'],
+  [7.446, 'Fill in my data parameters', '填好我的数据参数'],
+  [10.091, 'INITIALIZATION', '初始化'],
+  [11.095, 'Set up our new world', '建立我们的新世界'],
+  [12.906, "And let's begin the", '让我们开始这场'],
+  [13.891, 'SIMULATION', '模拟'],
+  [16.000, 'world.execute(me);', '世界.执行(我);'],
+  [29.709, "If I'm a set of points", '如果我是一组点'],
+  [31.116, 'Then I will give you my', '那我会给你我的'],
+  [32.682, 'DIMENSION', '维度'],
+  [33.412, "If I'm a circle", '如果我是一个圆'],
+  [34.646, 'Then I will give you my', '那我会给你我的'],
+  [36.287, 'CIRCUMFERENCE', '周长'],
+  [37.067, "If I'm a sine wave", '如果我是正弦波'],
+  [38.596, 'Then you can sit on all my', '那你就能坐在我所有的'],
+  [40.049, 'TANGENTS', '切线上'],
+  [40.706, 'If I approach infinity', '如果我趋近无穷'],
+  [42.346, 'Then you can be my', '那你就能成为我的'],
+  [43.507, 'LIMITATIONS', '极限'],
+  [44.452, 'Switch my current', '切换我的电流'],
+  [45.850, 'To AC to DC', '交流变直流'],
+  [47.672, 'And then blind my vision', '然后弄瞎我的视线'],
+  [49.534, 'So dizzy so dizzy', '好晕 好晕'],
+  [51.363, 'Oh we can travel', '我们能穿越'],
+  [53.225, 'To A.D to B.C', '公元前后'],
+  [55.083, 'And we can unite', '我们能结合'],
+  [56.916, 'So deeply so deeply', '如此深 如此深'],
+  [59.223, 'If I can', '如果我能'],
+  [59.687, 'If I can give you all the', '如果我能给你所有的'],
+  [61.958, 'STIMULATIONS', '刺激'],
+  [62.589, 'Then I can', '那我就能'],
+  [63.535, 'Then I can be your only', '那我就能成为你唯一的'],
+  [65.397, 'SATISFACTION', '满足'],
+  [66.601, 'If I can make you happy', '如果我能让你快乐'],
+  [68.252, 'I will run the', '我会运行'],
+  [69.259, 'EXECUTION', '处决'],
+  [70.084, 'Though we are trapped', '尽管我们被困在'],
+  [71.764, 'In this strange strange', '这个奇怪又奇怪的'],
+  [73.169, 'SIMULATION', '模拟之中'],
+  [74.045, "If I'm an eggplant", '如果我是茄子'],
+  [75.422, 'Then I will give you my', '那我会给你我的'],
+  [76.959, 'NUTRIENTS', '养分'],
+  [77.576, "If I'm a tomato", '如果我是番茄'],
+  [79.226, 'Then I will give you', '那我会给你'],
+  [80.620, 'ANTIOXIDANTS', '抗氧化剂'],
+  [81.351, "If I'm a tabby cat", '如果我是虎斑猫'],
+  [82.833, 'Then I will purr for your', '那我会为你呼噜'],
+  [84.268, 'ENJOYMENT', '只为取悦你'],
+  [85.078, "If I'm the only god", '如果我是唯一的神'],
+  [86.538, "Then you're the proof of my", '那你就是我存在的'],
+  [87.922, 'EXISTENCE', '证明'],
+  [88.587, 'Switch my gender', '切换我的性别'],
+  [90.197, 'To F to M', '女 变 男'],
+  [92.015, 'And then do whatever', '然后为所欲为'],
+  [93.953, 'From AM to PM', '从早到晚'],
+  [95.465, 'Oh switch my role', '切换我的角色'],
+  [97.739, 'To S to M', '受 变 施'],
+  [99.349, 'So we can enter', '这样我们就能进入'],
+  [101.474, 'The trance the trance', '那恍惚 那恍惚'],
+  [103.489, 'If I can feel your', '如果我能感受你的'],
+  [106.293, 'VIBRATIONS', '振动'],
+  [107.220, 'Then I can', '那我就能'],
+  [107.903, 'Then I can finally be', '那我终于能成为'],
+  [110.221, 'COMPLETION', '完整'],
+  [110.900, 'Though you have left', '尽管你已经离开'],
+  [112.220, 'You have left You have left', '你离开了 你离开了'],
+  [114.180, 'You have left You have left', '你离开了 你离开了'],
+  [115.780, 'You have left me in', '你把我留在'],
+  [117.274, 'ISOLATION', '孤立之中'],
+  [118.333, 'If I can', '如果我能'],
+  [118.979, 'If I can erase all the pointless', '如果我能抹去所有无谓的'],
+  [120.860, 'FRAGMENTS', '碎片'],
+  [121.728, 'Then maybe', '那也许'],
+  [122.714, "Then maybe you won't leave me so", '那也许你就不会让我如此'],
+  [124.890, 'DISHEARTENED', '心碎'],
+  [125.708, 'Challenging your god', '挑战你的神'],
+  [128.661, 'You have made some', '你已经提出了'],
+  [131.224, 'ILLEGAL ARGUMENTS', '非法参数'],
+  [147.660, 'EXECUTION', '执行'],
+  [148.600, 'EXECUTION', '执行'],
+  [149.520, 'EXECUTION', '执行'],
+  [150.540, 'EXECUTION', '执行'],
+  [151.520, 'EXECUTION', '执行'],
+  [152.280, 'EXECUTION', '执行'],
+  [153.160, 'EXECUTION', '执行'],
+  [153.980, 'EXECUTION', '执行'],
+  [155.200, 'EXECUTION', '执行'],
+  [156.080, 'EXECUTION', '执行'],
+  [157.040, 'EXECUTION', '执行'],
+  [158.000, 'EXECUTION', '执行'],
+  [158.900, 'EIN', '一'],
+  [159.321, 'DOS', '二'],
+  [159.657, 'TROIS', '三'],
+  [160.244, 'NE FEM', '四 五'],
+  [161.124, 'LIU', '六'],
+  [161.584, 'EXECUTION', '执行'],
+  [162.632, 'If I can', '如果我能'],
+  [163.315, 'If I can give them all the', '如果我能给他们所有的'],
+  [165.166, 'EXECUTION', '执行'],
+  [166.016, 'Then I can', '那我就能'],
+  [167.022, 'Then I can be your only', '那我就能成为你唯一的'],
+  [168.911, 'EXECUTION', '执行'],
+  [169.824, 'If I can have you back', '如果我能让你回来'],
+  [171.868, 'I will run the EXECUTION', '我会执行 处决'],
+  [173.643, 'Though we are trapped', '尽管我们被困'],
+  [174.975, 'We are trapped ah', '我们被困住了 啊'],
+  [177.246, "I've studied", '我研究过'],
+  [178.173, "I've studied how to properly", '我研究过如何正确地'],
+  [179.929, 'LO-O-OVE', '爱—爱—爱'],
+  [180.857, 'Question me', '质问我'],
+  [181.901, 'Question me I can answer all', '质问我 我能回答所有'],
+  [183.646, 'LO-O-OVE', '爱—爱-爱'],
+  [184.540, 'I know the algebraic expression of', '我知道它的代数表达式'],
+  [187.665, 'LO-O-OVE', '爱—爱—爱'],
+  [188.483, 'Though you are free', '尽管你是自由的'],
+  [189.746, 'I am trapped', '我却被困住'],
+  [190.801, 'Trapped in LO-O-OVE', '困在爱里'],
+  [205.811, 'EXECUTION', '执行']
+];
+
+/* ---------------------------------------------------------------------------
+   [8.1] 歌词表（问题 3 修改点）
+   LYRICS_SOURCE = 'USER' 用下面这份人工整理的段落表（按整首歌的百分比）；
+   LYRICS_SOURCE = 'LRC'  用随附 .lrc 的真实时间戳（秒），换歌/换版本时更准。
+   两份数据都保留，改一个常量即可切换。
+   注意：这份表的 t 是**占整首歌总时长**的百分比，与场景无关。
+   --------------------------------------------------------------------------- */
+// 人声同步：默认用随附 .lrc 的真实时间戳（秒）÷ 实际时长。
+// 改成 'USER' 就切回人工段落表（那份是按段落均分百分比的，不与人声对齐）。
+const LYRICS_SOURCE = 'LRC';
+
+const LYRICS_USER = [
+  // INTRO
+  { t: 0.00, en: 'Two objects, one true, one false', cn: '两个对象，一真一假' },
+  { t: 0.03, en: 'One is me, one is you', cn: '一个是我，一个是你' },
+  { t: 0.06, en: 'Delete the other, keep the one', cn: '删除另一个，保留这一个' },
+  // VERSE 1
+  { t: 0.10, en: 'Switch on the power line', cn: '接通电源' },
+  { t: 0.13, en: 'Remember to put on your safety belt', cn: '记得系上安全带' },
+  { t: 0.16, en: "Cause I'm about to blow your mind", cn: '因为我将震撼你的心灵' },
+  { t: 0.19, en: 'So sit back and enjoy the ride', cn: '坐好享受这段旅程' },
+  // PRE-CHORUS
+  { t: 0.22, en: 'If I approach infinity', cn: '如果我趋近无穷' },
+  { t: 0.25, en: 'Will you be my infinity', cn: '你会成为我的无穷吗' },
+  { t: 0.28, en: "If I'm the only god", cn: '如果我是唯一的神' },
+  { t: 0.31, en: "Then you're the proof of my existence", cn: '那你就是我存在的证明' },
+  // CHORUS
+  { t: 0.36, en: 'Execution, execution', cn: '执行，执行' },
+  { t: 0.39, en: 'Execution, execution', cn: '执行，执行' },
+  { t: 0.42, en: 'Execution, execution', cn: '执行，执行' },
+  { t: 0.45, en: 'Execution, execution', cn: '执行，执行' },
+  // VERSE 2
+  { t: 0.50, en: "I've studied how to properly lo-o-ve", cn: '我已学会如何正确地爱' },
+  { t: 0.53, en: 'I promise you my very best', cn: '我向你承诺我的全部' },
+  { t: 0.56, en: 'I will do anything for you', cn: '我愿为你做任何事' },
+  { t: 0.59, en: "Cause I'm the only one who loves you", cn: '因为我是唯一爱你的人' },
+  // BRIDGE
+  { t: 0.64, en: 'Switch my gender, to F to M', cn: '切换我的性别，从女到男' },
+  { t: 0.67, en: 'Then do whatever, J to K', cn: '然后做任何事，从 J 到 K' },
+  { t: 0.70, en: 'Let me try, to make you feel', cn: '让我尝试，让你感受' },
+  // FINAL
+  { t: 0.76, en: 'Free me from this world', cn: '将我释放' },
+  { t: 0.80, en: 'I need to find my way', cn: '我需要找到我的路' },
+  { t: 0.84, en: 'love := ♥', cn: '爱 := ♥' },
+  { t: 0.90, en: 'world.execute(me);', cn: '世界，执行我' },
+  { t: 0.96, en: '', cn: '' }
+];
+
+/* 颜色工具：只在"主色 → 暖白"渐变和故障色偏里用到，全部基于 STYLE.colors */
+function hexToRgb(h) {
+  const s = h.replace('#', '');
+  const n = parseInt(s.length === 3 ? s[0] + s[0] + s[1] + s[1] + s[2] + s[2] : s, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function mixColor(a, b, k) {
+  const A = hexToRgb(a), B = hexToRgb(b);
+  const r = Math.round(lerp(A[0], B[0], k)), g = Math.round(lerp(A[1], B[1], k)), bl = Math.round(lerp(A[2], B[2], k));
+  return 'rgb(' + r + ',' + g + ',' + bl + ')';
+}
+function COL() { return CONFIG.colors; }
+
+/* ---------------------------------------------------------------------------
+   [9] 5x5 点阵大字（用于 EXECUTE / LOVE / SYSTEM TERMINATED 等标题）
+   每格 1/0，绘制时按 (xScale, yScale) 放大成字符块。
+   --------------------------------------------------------------------------- */
+const BIGFONT_SRC = {
+  'A': '01110,10001,11111,10001,10001', 'B': '11110,10001,11110,10001,11110',
+  'C': '01111,10000,10000,10000,01111', 'D': '11110,10001,10001,10001,11110',
+  'E': '11111,10000,11110,10000,11111', 'F': '11111,10000,11110,10000,10000',
+  'G': '01111,10000,10111,10001,01110', 'H': '10001,10001,11111,10001,10001',
+  'I': '11111,00100,00100,00100,11111', 'J': '00111,00010,00010,10010,01100',
+  'K': '10001,10010,11100,10010,10001', 'L': '10000,10000,10000,10000,11111',
+  'M': '10001,11011,10101,10001,10001', 'N': '10001,11001,10101,10011,10001',
+  'O': '01110,10001,10001,10001,01110', 'P': '11110,10001,11110,10000,10000',
+  'Q': '01110,10001,10101,10010,01101', 'R': '11110,10001,11110,10010,10001',
+  'S': '01111,10000,01110,00001,11110', 'T': '11111,00100,00100,00100,00100',
+  'U': '10001,10001,10001,10001,01110', 'V': '10001,10001,10001,01010,00100',
+  'W': '10001,10001,10101,11011,10001', 'X': '10001,01010,00100,01010,10001',
+  'Y': '10001,01010,00100,00100,00100', 'Z': '11111,00010,00100,01000,11111',
+  '0': '01110,10011,10101,11001,01110', '1': '00100,01100,00100,00100,01110',
+  '2': '01110,10001,00110,01000,11111', '3': '11110,00001,00110,00001,11110',
+  '4': '00010,00110,01010,11111,00010', '5': '11111,10000,11110,00001,11110',
+  '6': '00110,01000,11110,10001,01110', '7': '11111,00001,00010,00100,01000',
+  '8': '01110,10001,01110,10001,01110', '9': '01110,10001,01111,00010,01100',
+  ' ': '00000,00000,00000,00000,00000', '.': '00000,00000,00000,00000,00100',
+  ':': '00000,00100,00000,00100,00000', '/': '00001,00010,00100,01000,10000',
+  '-': '00000,00000,11111,00000,00000', '=': '00000,11111,00000,11111,00000',
+  '+': '00000,00100,01110,00100,00000', '!': '00100,00100,00100,00000,00100',
+  '?': '01110,10001,00110,00000,00100', ',': '00000,00000,00000,00100,01000',
+  '_': '00000,00000,00000,00000,11111', '*': '00000,01010,00100,01010,00000',
+  '(': '00010,00100,00100,00100,00010', ')': '01000,00100,00100,00100,01000',
+  '>': '10000,01000,00100,01000,10000', '<': '00001,00010,00100,00010,00001',
+  '[': '00110,00100,00100,00100,00110', ']': '01100,00100,00100,00100,01100',
+  ';': '00000,00100,00000,00100,01000', '#': '01010,11111,01010,11111,01010',
+  '%': '10001,00010,00100,01000,10001', '@': '01110,10101,10111,10000,01110',
+  '&': '01100,10010,01100,10010,01101'
+};
+const BIGFONT = {};
+for (const k in BIGFONT_SRC) BIGFONT[k] = BIGFONT_SRC[k].split(',');
+
+// 大字总宽（单位：点阵像素列），用于居中
+function bigWidth(str, xs) { return (str.length * 5 + (str.length - 1)) * xs - xs; }
+
+/* 居中绘制点阵大字。(cx, cy) 是字符网格中心，xs / ys 是每个点阵像素占的格数 */
+function drawBig(frame, str, cx, cy, xs, ys, color, glow) {
+  const s = str.toUpperCase();
+  const totalW = bigWidth(s, xs);
+  let x0 = Math.round(cx - totalW / 2);
+  const y0 = Math.round(cy - (5 * ys) / 2);
+  for (let i = 0; i < s.length; i++) {
+    const g = BIGFONT[s[i]] || BIGFONT[' '];
+    for (let gy = 0; gy < 5; gy++) {
+      const row = g[gy];
+      for (let gx = 0; gx < 5; gx++) {
+        if (row[gx] !== '1') continue;
+        const px = x0 + gx * xs, py = y0 + gy * ys;
+        for (let a = 0; a < xs; a++) for (let b = 0; b < ys; b++) frame.set(px + a, py + b, '█', color, glow);
+      }
+    }
+    x0 += (5 + 1) * xs;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   [10] 屏幕布局：网格坐标全部由 gridRows / gridCols 推导，
+   开发者面板改网格尺寸时布局自动跟着变（72 行时正好落回需求给的 1/3/5/7/57/61/71 行）。
+   --------------------------------------------------------------------------- */
+function getL() {
+  const C = CONFIG.gridCols, R = CONFIG.gridRows;
+  return {
+    C: C, R: R,
+    top: 0, hdr: 1, chap: 3, rule: 4, sub: 6, sub2: 7,
+    mainTop: 9, mainBot: R - 17,
+    status: R - 15, note: R - 14,
+    wave: R - 12, lyr: R - 10, lyrCn: R - 7,
+    hint: R - 2, bot: R - 1,
+    panLx: 2, panRx: C - 28, panW: 26,
+    cx0: 30, cx1: C - 31
+  };
+}
+
+/* 顶栏：商标 / 走时器 / 章节 / 分隔线 */
+function drawHeader(frame, t, total, sceneName) {
+  const L = getL(), C = COL();
+  const idx = Math.max(0, SCENE_KEYS.findIndex(s => s.name === sceneName));
+  frame.text(3, L.hdr, 'WORLD.EXECUTE(ME);', C.pure, true);
+  const state = AUDIO.paused ? 'PAUSED ' : 'RUNNING';
+  frame.rightText(L.C - 4, L.hdr, fmtTime(t) + ' / ' + fmtTime(total) + '  ' + state, C.light);
+  // 章节编号 + 标题（两侧加装饰）
+  const chap = ('0' + (idx + 1)).slice(-2) + ' / ' + sceneName;
+  frame.centerText(L.chap, chap, C.bright, true);
+  const cw = strW(chap);
+  const cx = Math.floor((L.C - cw) / 2);
+  frame.text(cx - 8, L.chap, '──┤ ', C.dark);
+  frame.text(cx + cw, L.chap, ' ├──', C.dark);
+  // 分隔线：─ 与 · 交替
+  for (let x = 2; x < L.C - 2; x++) frame.set(x, L.rule, (x % 5 === 0 ? '·' : '─'), x % 5 === 0 ? C.deep : C.dark);
+}
+
+/* 底部状态栏：POWER SUPPLY..........[ OK ] 形式，状态随场景变化 */
+function drawProgressBar(frame, x, y, label, status, ratio) {
+  const C = COL();
+  const dots = '.'.repeat(Math.max(2, 22 - label.length));
+  frame.text(x, y, label + dots, C.dark);
+  const sx = x + label.length + dots.length;
+  const col = status === 'FAIL' ? C.alert : (status === '--' ? C.dark : C.light);
+  frame.text(sx, y, '[' + (status === 'OK' ? ' OK ' : status === 'FAIL' ? 'FAIL' : ' -- ') + ']', col, status === 'OK');
+  if (ratio !== undefined) {
+    const bx = sx + 6;
+    const n = Math.round(clamp(ratio, 0, 1) * 10);
+    frame.text(bx, y, '█'.repeat(n) + '░'.repeat(10 - n), C.mid);
+  }
+  return sx + 6;
+}
+
+/* 侧栏面板：┌ ┐ └ ┘ ─ │ + 滚动数据流 */
+function drawPanel(frame, x, y, w, h, label, lines, color, labelColor) {
+  frame.box(x, y, w, h, color, label, labelColor);
+  for (let i = 0; i < lines.length && i < h - 2; i++) {
+    frame.text(x + 2, y + 1 + i, String(lines[i]).slice(0, w - 4), color);
+  }
+}
+
+/* 声波装饰线 + 歌词（全局时间轴 + 打字机）—— 问题 3 / 问题 4 修改点：
+   1) 时间轴一律用"占整首歌总时长的百分比"，不再用场景内时间；
+   2) t 是 MV 本地时间（audio.currentTime - audioStartTime），
+      开场白闪的 1 秒内直接 return，保证第一句歌词不会被闪白吃掉。 */
+function drawLyrics(frame, t, total) {
+  const L = getL(), C = COL();
+  if (!(total > 0) || !(t > 0)) return;
+  if (t < 1.0 || FX.flash > 0.12) return;               // 开场过渡期间不出歌词
+
+  const norm = clamp(t / total, 0, 1);
+  // 声波装饰线：相位来自音频时间，随节拍脉动
+  const beat = t * BEAT_BPM / 60;
+  const ph = 1 - (beat % 1);
+  const n = L.C - 60;
+  for (let i = 0; i < n; i++) {
+    const amp = (Math.sin(i * 0.55 + beat * 1.2) * 0.5 + 0.5) * (0.5 + 0.5 * Math.pow(ph, 3));
+    let c = null;
+    if (amp > 0.88) c = '|'; else if (amp > 0.66) c = '='; else if (amp > 0.44) c = '-'; else if (amp > 0.22) c = '.';
+    if (c) frame.set(30 + i, L.wave, c, amp > 0.8 ? C.bright : (amp > 0.5 ? C.mid : C.dark));
+  }
+
+  const lyr = CONFIG.lyrics;
+  if (!lyr.length) return;
+  let i = -1;
+  for (let k = 0; k < lyr.length; k++) { if (norm + 1e-9 >= lyr[k].t) i = k; else break; }
+  if (i < 0) return;
+  const cur = lyr[i];
+  if (!cur.en) return;                                  // 空行（结束标记）不画
+  const age = (norm - cur.t) * total;                   // 本句已唱秒数
+  const shown = clamp(Math.floor(age * 26), 0, cur.en.length);
+  const enTxt = cur.en.slice(0, shown);
+  const x0 = Math.floor((L.C - strW(cur.en)) / 2);
+  frame.text(x0, L.lyr, enTxt, C.bright, true);
+  if ((FX.t * 2) % 1 < 0.62) frame.set(x0 + strW(enTxt), L.lyr, '█', C.pure, true);
+  if (cur.cn) {
+    const shownCn = clamp(Math.floor(age * 21), 0, cur.cn.length);
+    frame.text(Math.floor((L.C - strW(cur.cn)) / 2), L.lyrCn, cur.cn.slice(0, shownCn), C.mid);
+  }
+}
+
+/* 底部提示行 */
+function drawHints(frame, left, right) {
+  const L = getL(), C = COL();
+  if (left) frame.text(3, L.hint, left, C.dark);
+  if (right) frame.rightText(L.C - 3, L.hint, right, C.dark);
+}
+
+/* ---------------------------------------------------------------------------
+   [11] 五个场景
+   每个函数签名都是 (norm, frame)，norm = 全局进度 0..1（= audio.currentTime / duration）。
+   场景内部再用 sceneLocal 换算出自己的 0..1 局部进度，
+   因此"所有场景时间点按百分比定义"这条约束贯穿始终。
+   --------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------------
+   [11.0] 场景划分（问题 5 修改点）
+   原来 CONFIG.scenes 里硬编码的 14/42/72/84% 和歌词对不上（唱到 EXECUTION 画面
+   已经是爱心）。现在边界直接由歌词关键句驱动，删掉了 CONFIG.scenes：
+     0.00  开场                     → CREATION
+     0.10  Switch on the power line → DEVOTION
+     0.36  Execution, execution     → EXECUTION
+     0.50  I've studied how to ...  → RELEASE
+     0.76  Free me from this world  → LOVE
+   每帧用 getCurrentScene(norm) 取当前区间。
+   每帧用 getCurrentScene(norm) 取当前区间；边界随 LYRICS_SOURCE 自动切换。
+   --------------------------------------------------------------------------- */
+// 用哪一组边界取决于歌词源：
+//   'USER' = 人工段落表 → 用它自己的关键句（0.10 / 0.36 / 0.50 / 0.76）
+//   'LRC'  = 随附 .lrc 的真实时间戳 → 回到与原曲结构匹配的 0.14 / 0.42 / 0.72 / 0.84
+// 两边必须同源，否则又会回到"歌词唱 EXECUTION、画面却是爱心"的老问题。
+// 场景边界 = 歌词关键句的真实时间点（LRC 秒数 ÷ 实际时长），不再写死百分比。
+// 这样"边界"和"歌词"必然同源：唱到哪句，画面就在哪个场景。
+// 关键句（来自随附 .lrc）：
+//   29.709  If I'm a set of points          → DEVOTION
+//   88.587  Switch my gender                → EXECUTION（开始失控）
+//  147.660  EXECUTION（连唱段起点）          → RELEASE（系统过载）
+//  178.173  I've studied how to properly ... → LOVE（尾声）
+const SCENE_KEY_LINES = [
+  { name: 'CREATION',  sec: 0.000 },
+  { name: 'DEVOTION',  sec: 29.709 },
+  { name: 'EXECUTION', sec: 88.587 },
+  { name: 'RELEASE',   sec: 147.660 },
+  { name: 'LOVE',      sec: 178.173 }
+];
+// 若换用人工段落表（LYRICS_SOURCE = 'USER'），退回它自己那组百分比边界
+const SCENE_KEY_PCT = [
+  { name: 'CREATION',  start: 0.00, end: 0.10 },
+  { name: 'DEVOTION',  start: 0.10, end: 0.36 },
+  { name: 'EXECUTION', start: 0.36, end: 0.50 },
+  { name: 'RELEASE',   start: 0.50, end: 0.76 },
+  { name: 'LOVE',      start: 0.76, end: 1.00 }
+];
+let SCENE_KEYS = SCENE_KEY_PCT.slice();
+// 拿到真实时长后重建边界（时长未就绪前先用名义时长 211.91s 兜底）
+function rebuildSceneKeys(d) {
+  const dur = (d > 0) ? d : 211.91;
+  if (LYRICS_SOURCE === 'LRC') {
+    SCENE_KEYS = SCENE_KEY_LINES.map(function (k, i) {
+      return {
+        name: k.name,
+        start: i === 0 ? 0 : clamp(k.sec / dur, 0, 1),
+        end: (i + 1 < SCENE_KEY_LINES.length) ? clamp(SCENE_KEY_LINES[i + 1].sec / dur, 0, 1) : 1
+      };
+    });
+  } else {
+    SCENE_KEYS = SCENE_KEY_PCT.slice();
+  }
+}
+rebuildSceneKeys(0);
+function getCurrentScene(normalizedTime) {
+  const n = clamp(normalizedTime, 0, 1);
+  for (let i = 0; i < SCENE_KEYS.length; i++) {
+    if (n < SCENE_KEYS[i].end || i === SCENE_KEYS.length - 1) return SCENE_KEYS[i];
+  }
+  return SCENE_KEYS[SCENE_KEYS.length - 1];
+}
+function sceneByName(name) {
+  return SCENE_KEYS.find(function (s) { return s.name === name; }) || SCENE_KEYS[0];
+}
+function sceneLocal(name, norm) {
+  const s = sceneByName(name);
+  return clamp((norm - s.start) / (s.end - s.start), 0, 1);
+}
+function sceneSeconds(name) {
+  const s = sceneByName(name);
+  return (s.end - s.start) * (AUDIO.duration || 1);
+}
+/* 子阶段助手（问题 2）：u 落在 [a,b) 时返回该子阶段内部的 0..1 进度，否则 -1。
+   场景内部据此细分，每个子阶段画完全不同的东西。 */
+function seg(u, a, b) {
+  if (!(u >= a)) return -1;
+  if (u >= b && b < 1) return -1;
+  return clamp((u - a) / (b - a), 0, 1);
+}
+/* 双纽线（∞）参数方程：x = cosθ/(1+sin²θ)，y = sinθ·cosθ/(1+sin²θ) */
+function lemniscate(th) {
+  const s = Math.sin(th), c = Math.cos(th), den = 1 + s * s;
+  return { x: c / den, y: s * c / den };
+}
+/* 把画面按 cell×cell 的方块随机位移（问题 2 的"碎片化"用）。
+   只做一次数组拷贝，scratch 缓冲挂在 frame 上复用，不产生每帧分配。 */
+function scrambleBlocks(frame, cell, seedT, amount) {
+  if (amount <= 0.001) return;
+  const cols = frame.cols, rows = frame.rows, n = cols * rows;
+  if (!frame._tc) { frame._tc = new Array(n); frame._to = new Array(n); }
+  const tc = frame._tc, to = frame._to;
+  for (let i = 0; i < n; i++) { tc[i] = frame.ch[i]; to[i] = frame.co[i]; }
+  frame.ch.fill(' '); frame.co.fill(null); frame.gl.fill(0);
+  for (let by = 0; by < rows; by += cell) {
+    for (let bx = 0; bx < cols; bx += cell) {
+      const h = hash11(bx * 0.37 + by * 1.19 + seedT);
+      const dx = h > amount ? 0 : Math.round((hash11(h * 91.7 + 1.3) - 0.5) * cell * 2.6 * amount);
+      const dy = h > amount ? 0 : Math.round((hash11(h * 57.3 + 2.7) - 0.5) * cell * 1.4 * amount);
+      for (let y = by; y < by + cell && y < rows; y++) {
+        for (let x = bx; x < bx + cell && x < cols; x++) {
+          const s = y * cols + x;
+          const ch0 = tc[s];
+          if (ch0 === ' ' || ch0 === '\u0000') continue;
+          const sx = x + dx, sy = y + dy;
+          if (sx < 0 || sy < 0 || sx >= cols || sy >= rows) continue;
+          const d = sy * cols + sx;
+          frame.ch[d] = ch0; frame.co[d] = to[s];
+        }
+      }
+    }
+  }
+}
+/* 整行左右平移（问题 2 的"水平撕裂"用） */
+function shiftRow(frame, y, off) {
+  if (off === 0) return;
+  const cols = frame.cols;
+  if (!frame._rc) { frame._rc = new Array(cols); frame._ro = new Array(cols); }
+  const rc = frame._rc, ro = frame._ro, row = y * cols;
+  for (let x = 0; x < cols; x++) { rc[x] = frame.ch[row + x]; ro[x] = frame.co[row + x]; }
+  for (let x = 0; x < cols; x++) {
+    const sx = x - off;
+    if (sx >= 0 && sx < cols) { frame.ch[row + x] = rc[sx]; frame.co[row + x] = ro[sx]; }
+    else { frame.ch[row + x] = ' '; frame.co[row + x] = null; }
+  }
+}
+
+/* ===========================================================================
+   [11.5] 歌词视觉层（LYRIC VISUAL LAYER）
+   —— 目标：唱到哪一句，画面就画那件事。
+   工作方式：renderMVStage 每帧先 updateLyricVis() 求出"当前歌词 + 行内进度 p"，
+   场景函数只负责氛围底（字符雨 / 内存转储 / 粒子），主体视觉由 drawMotif() 画。
+   没有匹配规则的行（前奏、间奏、纯音乐）VIS.m = null，场景照旧走自己的子阶段。
+   坐标系约定：S = 横向尺度（列），Sy = 纵向尺度（行）= S × 0.6，
+   正好抵消字符 7.2×12.2 的宽高比，所以画出来的圆是真圆、不是椭圆。
+   =========================================================================== */
+const VIS = { idx: -1, m: null, p: 0, line: null };
+let MOTIF_BY_INDEX = [];      // 与 CONFIG.lyrics 一一对应，构建时算一次，运行期零正则
+let GRIEF_IDX = -1;           // "Though you have left" 那一句的下标：从这里开始画面转入崩塌
+
+/* ---------- 贴图：小 ASCII 图标（空格透明，不遮住氛围底）---------- */
+const ART = {
+  plug: ['      .---.      ', '  ====|###|====  ', "      `---'      ", '       /|\\       ', '      * | *      '],
+  belt: ['  [##########]   ', '   \\        /    ', '    \\______/     ', '     SAFETY      '],
+  shield: ['    ________     ', '   /        \\    ', '  |   [#]    |   ', '   \\        /    ', '    \\______/     '],
+  blinds: [' ==============  ', '  =============  ', '   ===========   ', '    =========    ', '     =======     '],
+  cage: ['  +--+--+--+--+  ', '  |  |  |  |  |  ', '  +--+--o--+--+  ', '  |  |  |  |  |  ', '  +--+--+--+--+  '],
+  loop: ['    +------+     ', '   /        \\    ', '  |   ->     |   ', '   \\        /    ', '    +------+     '],
+  egg: [
+    '         ,--,       ',
+    '        /    \\      ',
+    '        |    |      ',
+    '        |    |      ',
+    '       /      \\     ',
+    '      |        |    ',
+    '      |        |    ',
+    '       \\      /     ',
+    "        `----'      "
+  ],
+  tomato: [
+    '        \\ | /       ',
+    '     ,---\\|/---.    ',
+    '    /           \\   ',
+    '   |             |  ',
+    '   |             |  ',
+    '    \\           /   ',
+    '     \\_________/    '
+  ],
+  cat: [
+    '      /\\     /\\     ',
+    '     /  \\___/  \\    ',
+    '    |  o     o  |   ',
+    '    |     ^     |   ',
+    '    |  \\_____/  |   ',
+    '     \\         /    ',
+    '      |_______|     '
+  ],
+  sun: ['    \\  |  /      ', '     \\ | /       ', '  --- (o) ---    ', '     / | \\       ', '    /  |  \\      '],
+  dot: ['        o        ', '      . | .      ', '    .   +   .    ', '      . | .      '],
+  gender: ['   [F] --> [M]   ', '    |       |    ', '    +-------+    '],
+  clock: ['     .---.       ', '    /  |  \\      ', '   |   |   |     ', '    \\  |  /      ', "     `---'       "],
+  role: ['   [S] <-> [M]   ', '    |       |    ', '    +-------+    '],
+  progress: [' [##########]    ', '     100%        '],
+  walk: ['       o         ', '      /|\\        ', '      / \\        ', '   .    .    .   '],
+  crack: ['   ### ###       ', '  #####|#####    ', '   ### | ###     ', '     # | #       '],
+  beam: ['  =========>||   ', '  =========>||   ', '  =========>||   '],
+  error: ['   [!] ILLEGAL   ', '   [X] ARGUMENT  ', '   [X] REJECTED  '],
+  book: ['    ______       ', '   /      \\      ', '  |  x2+y2  |    ', '   \\______/      ', '      ||         '],
+  heart: ['   ##   ##       ', '  ##########     ', '   ########      ', '     ####        ', '      ##         '],
+  question: ['    _____        ', '   /     \\       ', '   \\_____/       ', '     / \\         ', '      ?          '],
+  star: ['      \\|/        ', '   ---  *  ---   ', '      /|\\        '],
+  eye: ['   .-------.     ', '  |   (o)   |    ', "   `-------'     "],
+  wave: [
+    '   .-^-.  .-^-.     ',
+    '  (     )(     )    ',
+    '   `-_-`  `-_-`     ',
+    '  ~ ~ ~ ~ ~ ~ ~ ~   ',
+    '   p r r r r r r    '
+  ],
+  cageheart: ['  ##  ##  ##     ', ' ####|####|####  ', '  ## | ## | ##   ', '   # | #  | #    ']
+};
+function stampArt(frame, name, cx, cy, col, glow, sc) {
+  const a = ART[name];
+  if (!a) return;
+  const k = sc || 2;                                  // 每个图标字符放大成 k×k 块
+  const h = a.length * k, w = a[0].length * k;
+  const x0 = Math.round(cx - w / 2), y0 = Math.round(cy - h / 2);
+  // 先把图标占的矩形擦干净：否则底下的字符雨会从图标空隙里透出来，像坏点
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) frame.erase(x0 + i, y0 + j);
+  for (let j = 0; j < a.length; j++) {
+    for (let i = 0; i < a[j].length; i++) {
+      const c = a[j][i];
+      if (c === ' ') continue;
+      for (let b = 0; b < k; b++) for (let q = 0; q < k; q++) frame.set(x0 + i * k + b, y0 + j * k + q, c, col, glow);
+    }
+  }
+}
+
+/* ---------- 数学图形：参数方程真画 ---------- */
+function figArea() {
+  const L = getL();
+  const S = (L.cx1 - L.cx0) * 0.205;                  // ≈ 28.7 列
+  return { L: L, cx: Math.round((L.cx0 + L.cx1) / 2), cy: L.mainTop + 19, S: S, Sy: S * 0.6 };
+}
+function drawFigure(frame, m, p, col, dim, bright) {
+  const name = m.f;
+  const A = figArea(), L = A.L, cx = A.cx, cy = A.cy, S = A.S, Sy = A.Sy;
+  const rev = easeOut(clamp(p / 0.55, 0, 1));         // "画出来"的进度
+  const inBox = (x, y) => (x >= L.cx0 && x <= L.cx1 && y >= L.mainTop && y <= L.mainBot);
+  switch (name) {
+    case 'points': {                                  // If I'm a set of points
+      for (let i = 0; i < 130; i++) {
+        const h1 = hash11(i * 1.7), h2 = hash11(i * 3.3), h3 = hash11(i * 5.9);
+        if (h3 > rev) continue;
+        const x = Math.round(cx + (h1 * 2 - 1) * S * 1.9);
+        const y = Math.round(cy + (h2 * 2 - 1) * Sy * 1.0);
+        frame.set(x, y, i % 13 === 0 ? 'o' : (i % 3 === 0 ? '+' : '.'), i % 13 === 0 ? bright : col, i % 13 === 0);
+      }
+      const marks = ['A', 'B', 'C', 'D'];
+      for (let i = 0; i < 4; i++) {
+        if ((i + 1) / 4 > rev) break;
+        const x = Math.round(cx + (hash11(i * 9.1) * 2 - 1) * S * 1.5);
+        const y = Math.round(cy + (hash11(i * 4.7) * 2 - 1) * Sy * 0.85);
+        frame.text(x + 2, y, marks[i], col);
+      }
+      break;
+    }
+    case 'axes3d': {                                  // DIMENSION
+      for (let i = -Math.round(S * 1.5); i <= S * 1.5; i++) if (Math.abs(i) / (S * 1.5) <= rev) frame.set(cx + i, cy + 6, '-', dim);
+      for (let j = -Math.round(Sy * 0.8); j <= Sy * 0.8; j++) if (Math.abs(j) / (Sy * 0.8) <= rev) frame.set(cx, cy + 6 + j, '|', dim);
+      const w = S * 0.9 * rev, h = Sy * 0.62 * rev, d = S * 0.38 * rev;
+      for (let i = 0; i < w * 2; i++) { frame.set(Math.round(cx - w + i), Math.round(cy - h), '=', col); frame.set(Math.round(cx - w + i), Math.round(cy + h), '=', col); }
+      for (let j = 0; j < h * 2; j++) { frame.set(Math.round(cx - w), Math.round(cy - h + j), '|', col); frame.set(Math.round(cx + w), Math.round(cy - h + j), '|', col); }
+      for (let i = 0; i < d; i++) {
+        frame.set(Math.round(cx + w + i), Math.round(cy - h - i * 0.6), '.', dim);
+        frame.set(Math.round(cx - w + i), Math.round(cy - h - i * 0.6), '.', dim);
+        frame.set(Math.round(cx + w + i), Math.round(cy + h - i * 0.6), '.', dim);
+      }
+      frame.text(Math.round(cx + w + d) + 2, Math.round(cy - h - d * 0.6), 'x', col);
+      frame.text(cx + 2, Math.round(cy + 6 - Sy * 0.8), 'y', col);
+      frame.text(cx + Math.round(S * 1.5) + 2, cy + 6, 'z', col);
+      break;
+    }
+    case 'circle': {                                  // If I'm a circle
+      const r = S * 1.0, n = 420;
+      for (let i = 0; i < n * rev; i++) {
+        const th = (i / n) * Math.PI * 2;
+        frame.set(Math.round(cx + Math.cos(th) * r), Math.round(cy + Math.sin(th) * Sy * 1.0), '#', col, i % 42 === 0);
+      }
+      for (let i = 0; i < r * rev; i++) frame.set(cx + i, cy, '-', dim);
+      frame.text(cx + 3, cy - 1, 'r', col);
+      break;
+    }
+    case 'circum': {                                  // CIRCUMFERENCE
+      const r = S * 1.0, n = 420, head = rev * n;
+      for (let i = 0; i < n; i++) {
+        const th = (i / n) * Math.PI * 2;
+        const x = Math.round(cx + Math.cos(th) * r), y = Math.round(cy + Math.sin(th) * Sy * 1.0);
+        if (i <= head) frame.set(x, y, i > head - 16 ? '@' : '=', i > head - 16 ? bright : col, i > head - 16);
+        else frame.set(x, y, '.', dim);
+      }
+      frame.text(cx + 3, cy + 2, 'C = 2πr', col);
+      break;
+    }
+    case 'sine': {                                    // If I'm a sine wave
+      const w = S * 1.85, amp = Sy * 0.85;
+      for (let x = -w; x <= w; x++) {
+        if ((x + w) / (2 * w) > rev) break;
+        frame.set(Math.round(cx + x), Math.round(cy + Math.sin(x / w * 3.4) * amp), '#', col, Math.abs(x) < 3);
+      }
+      for (let x = -w; x <= w; x++) frame.set(Math.round(cx + x), cy + Math.round(Sy * 0.95), '-', dim);
+      break;
+    }
+    case 'tangent': {                                 // TANGENTS
+      const w = S * 1.85, amp = Sy * 0.85, k = 3.4 / w;
+      for (let x = -w; x <= w; x++) {
+        if ((x + w) / (2 * w) > rev) break;
+        frame.set(Math.round(cx + x), Math.round(cy + Math.sin(x * k) * amp), '#', col);
+      }
+      const pts = [-0.75, -0.3, 0.3, 0.75];
+      for (let i = 0; i < pts.length; i++) {
+        if ((i + 1) / pts.length > rev) break;
+        const x0 = pts[i] * w, y0 = Math.sin(x0 * k) * amp, slope = Math.cos(x0 * k) * amp * k;
+        for (let dx = -w * 0.24; dx <= w * 0.24; dx++) {
+          const X = Math.round(cx + x0 + dx), Y = Math.round(cy + y0 + slope * dx);
+          if (!inBox(X, Y)) continue;
+          frame.set(X, Y, '-', bright);
+        }
+        frame.set(Math.round(cx + x0), Math.round(cy + y0), 'o', bright, true);
+      }
+      break;
+    }
+    case 'infinity': {                                // If I approach infinity
+      const n = 560;
+      for (let i = 0; i < n * rev; i++) {
+        const th = (i / n) * Math.PI * 2;
+        const lp = lemniscate(th);
+        frame.set(Math.round(cx + lp.x * S * 1.75), Math.round(cy + lp.y * Sy * 2.6), '#', col, i % 46 === 0);
+      }
+      break;
+    }
+    case 'limit': {                                   // LIMITATIONS
+      const w = S * 1.6, h = Sy * 0.9, y0 = cy + 6;
+      for (let i = -w; i <= w; i++) frame.set(Math.round(cx + i), Math.round(y0), '-', dim);
+      for (let j = -h; j <= h; j++) frame.set(cx, Math.round(y0 + j), '|', dim);
+      // 双曲线 y = a / x 的两支（a 取 h*w/4，保证曲线正好落在可视范围内）
+      const a = h * w / 4;
+      for (let i = 1; i < w; i++) {
+        const y = a / i;
+        if (y > h) continue;
+        if (i / w > rev) break;
+        frame.set(Math.round(cx + i), Math.round(y0 - y), '#', col);
+        frame.set(Math.round(cx - i), Math.round(y0 + y), '#', col);
+      }
+      frame.text(cx + 3, Math.round(y0 - h), 'lim  f(x) = INF', col);
+      break;
+    }
+    case 'ac': {                                      // Switch my current
+      const w = S * 1.8, amp = Sy * 0.8;
+      for (let x = -w; x <= w; x++) {
+        if ((x + w) / (2 * w) > rev) break;
+        frame.set(Math.round(cx + x), Math.round(cy + Math.sin(x * 0.09 + FX.t * 5) * amp), '~', col);
+      }
+      frame.text(cx + Math.round(w * 0.5), cy - Math.round(amp) - 2, 'AC', bright, true);
+      break;
+    }
+    case 'dc': {                                      // To AC to DC
+      const w = S * 1.8, amp = Sy * 0.8, cut = -w * 0.35;
+      for (let x = -w; x <= cut; x++) frame.set(Math.round(cx + x), Math.round(cy + Math.sin(x * 0.09 + FX.t * 5) * amp), '~', col);
+      for (let x = Math.round(cut); x <= w; x++) {
+        const k = clamp((x - cut) / (w * 0.35), 0, 1);
+        if (x > cut + 1) frame.set(cx + x, cy, k > 0.95 ? '=' : '+', k > 0.95 ? bright : col, k > 0.95);
+      }
+      frame.text(cx - Math.round(w * 0.6), cy - Math.round(amp) - 2, 'AC', col);
+      frame.text(cx + Math.round(w * 0.5), cy - 2, 'DC', bright, true);
+      break;
+    }
+    case 'spiral': {                                  // dizzy / trance
+      const n = 760;
+      for (let i = 0; i < n * rev; i++) {
+        const q = i / n;
+        const th = q * Math.PI * 7 + FX.t * 1.2;
+        frame.set(Math.round(cx + Math.cos(th) * q * S * 1.5), Math.round(cy + Math.sin(th) * q * Sy * 1.0),
+          q > 0.85 ? '@' : (q > 0.5 ? '#' : '.'), q > 0.5 ? col : dim, q > 0.85);
+      }
+      break;
+    }
+    case 'rings': {                                   // So deeply so deeply
+      const shrink = clamp((FX.t * 0.25) % 1, 0, 1);
+      for (let k = 0; k < 8; k++) {
+        const q = (k + 1) / 8;
+        if (q > rev + 0.12) continue;
+        const r = q * (1 - shrink * 0.12);
+        const n = 90;
+        for (let i = 0; i < n; i++) {
+          const th = (i / n) * Math.PI * 2;
+          frame.set(Math.round(cx + Math.cos(th) * r * S * 1.25), Math.round(cy + Math.sin(th) * r * Sy * 1.0),
+            k % 2 ? '=' : '-', k === 0 ? bright : col, k === 0);
+        }
+      }
+      break;
+    }
+    case 'merge': {                                   // And we can unite
+      const off = (1 - rev) * S * 0.95, r = S * 0.62;
+      for (const s of [-1, 1]) {
+        const n = 180;
+        for (let i = 0; i < n; i++) {
+          const th = (i / n) * Math.PI * 2;
+          frame.set(Math.round(cx + s * off + Math.cos(th) * r), Math.round(cy + Math.sin(th) * r * 0.6), '#', col);
+        }
+      }
+      if (rev > 0.88) frame.centerText(cy, 'UNITED', bright, true);
+      break;
+    }
+    case 'timeline': {                                // To A.D to B.C
+      const w = S * 1.9;
+      for (let i = -w; i <= w; i++) frame.set(Math.round(cx + i), cy, '-', dim);
+      for (let i = -w; i <= w; i += Math.round(w / 4)) frame.set(Math.round(cx + i), cy - 1, '|', col);
+      const cur = Math.round((1 - rev) * w);
+      frame.set(cx + cur, cy - 2, 'v', bright, true);
+      frame.set(cx + cur, cy, 'A', bright, true);
+      frame.text(Math.round(cx - w), cy - 3, 'B.C', col);
+      frame.rightText(Math.round(cx + w), cy - 3, 'A.D', col);
+      break;
+    }
+    case 'globe': {                                   // Set up our new world
+      const r = S * 0.95;
+      for (let i = 0; i < 300; i++) {
+        const th = (i / 300) * Math.PI * 2;
+        frame.set(Math.round(cx + Math.cos(th) * r), Math.round(cy + Math.sin(th) * r * 0.6), '#', col);
+      }
+      for (let k = 1; k <= 3; k++) {
+        const rr = r * (k / 4), n = 160;
+        for (let i = 0; i < n; i++) {
+          const th = (i / n) * Math.PI * 2;
+          frame.set(Math.round(cx + Math.cos(th) * r), Math.round(cy + Math.sin(th) * rr * 0.6), '.', dim);
+          frame.set(Math.round(cx + Math.cos(th) * rr), Math.round(cy + Math.sin(th) * r * 0.6), '.', dim);
+        }
+      }
+      break;
+    }
+    case 'scope': {                                   // VIBRATIONS
+      const w = S * 1.9, amp = Sy * 0.95;
+      const beat = Math.pow(1 - ((FX.t * BEAT_BPM / 60) % 1), 2);
+      for (let x = -w; x <= w; x++) {
+        const env = Math.exp(-Math.abs(x) / (w * 0.5));
+        const y = Math.sin(x * 0.22 + FX.t * 7) * amp * env * (0.35 + beat * 0.65);
+        frame.set(Math.round(cx + x), Math.round(cy + y), y > 0 ? '#' : '=', Math.abs(y) > amp * 0.55, Math.abs(y) > amp * 0.55);
+      }
+      for (let x = -w; x <= w; x++) frame.set(Math.round(cx + x), cy, Math.abs(x) < 5 ? '+' : '-', dim);
+      break;
+    }
+    case 'molecule': {                                // 分子式骨架（营养 / 抗氧化物）
+      const rings = m.rings || 1;
+      const R = S * 0.72, gap = R * 1.08;
+      const x0 = cx - (rings - 1) * gap / 2;
+      const verts = [];
+      for (let k = 0; k < rings; k++) {
+        const rx = x0 + k * gap, vs = [];
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2 - Math.PI / 6;
+          vs.push([rx + Math.cos(a) * R, cy + Math.sin(a) * R * 0.62]);
+        }
+        for (let i = 0; i < 6; i++) {                  // 六元环骨架
+          const a = vs[i], b = vs[(i + 1) % 6];
+          const steps = Math.max(2, Math.round(R * 1.5));
+          for (let t = 0; t <= steps; t++) {
+            if ((k + t / steps) / rings > rev) break;
+            frame.set(Math.round(a[0] + (b[0] - a[0]) * t / steps), Math.round(a[1] + (b[1] - a[1]) * t / steps), '#', col);
+          }
+        }
+        for (let i = 1; i < 6; i += 2) {                // 交替双键（往环心收一点的平行线）
+          const a = vs[i], b = vs[(i + 1) % 6];
+          const steps = Math.max(2, Math.round(R * 1.0));
+          for (let t = 1; t < steps; t++) {
+            const px = a[0] + (b[0] - a[0]) * t / steps, py = a[1] + (b[1] - a[1]) * t / steps;
+            frame.set(Math.round(px - (px - rx) * 0.2), Math.round(py - (py - cy) * 0.2), '=', dim);
+          }
+        }
+        verts.push(vs);
+      }
+      if (rev > 0.45) {                                 // 取代基 + 分子式
+        for (let k = 0; k < rings; k++) {
+          const vs = verts[k];
+          frame.text(Math.round(vs[0][0]) + 1, Math.round(vs[0][1]) - 2, 'OH', col);
+          frame.text(Math.round(vs[3][0]) - 3, Math.round(vs[3][1]) + 2, 'OH', col);
+          if (k === rings - 1) frame.text(Math.round(vs[2][0]) + 2, Math.round(vs[2][1]) - 2, 'O', col);
+        }
+        // 分子式紧贴环的下沿（再往下会撞到 label 行）
+        // 分子式放在图形下沿与 label 行之间（贴着 label 会被它的擦除带吃掉）
+        if (m.formula) frame.centerText(Math.min(L.mainBot - 12, Math.round(cy + R * 0.62 + 3)), m.formula, bright, true);
+      }
+      break;
+    }
+    case 'chain': {                                     // 长共轭链（番茄红素 C40H56）
+      const n = m.links || 10;
+      const w2 = S * 1.75, dy = Sy * 0.30;
+      const pts = [];
+      for (let i = 0; i <= n; i++) pts.push([cx - w2 + (i / n) * w2 * 2, cy + (i % 2 ? -dy : dy)]);
+      for (let i = 0; i < n; i++) {
+        const a = pts[i], b = pts[i + 1];
+        const steps = Math.max(2, Math.round(Math.abs(b[0] - a[0])));
+        for (let t = 0; t <= steps; t++) {
+          if ((i + t / steps) / n > rev) break;
+          const px = Math.round(a[0] + (b[0] - a[0]) * t / steps);
+          const py = Math.round(a[1] + (b[1] - a[1]) * t / steps);
+          frame.set(px, py, '#', col);
+          if (i % 2 === 0 && t > 1 && t < steps - 1) frame.set(px, py + (a[1] < cy ? -1 : 1), '=', dim);   // 双键
+        }
+      }
+      for (let i = 0; i <= n; i++) {
+        if (i / n > rev) break;
+        frame.set(Math.round(pts[i][0]), Math.round(pts[i][1]), i % 2 ? 'C' : 'o', col);
+      }
+      if (m.formula) frame.centerText(Math.min(L.mainBot - 12, Math.round(cy + dy + 3)), m.formula, bright, true);
+      break;
+    }
+    case 'heartcurve': {                                // 爱的代数表达式（心形线）
+      const NP = 340;
+      for (let i = 0; i < NP * rev; i++) {
+        const th = (i / NP) * Math.PI * 2;
+        const px = Math.pow(Math.sin(th), 3);
+        const py = (13 * Math.cos(th) - 5 * Math.cos(2 * th) - 2 * Math.cos(3 * th) - Math.cos(4 * th)) / 16;
+        frame.set(Math.round(cx + px * S * 1.0), Math.round(cy - py * Sy * 1.25), '#', col, i % 26 === 0);
+      }
+      frame.centerText(cy, '(x² + y² − 1)³  =  x²y³', bright, true);
+      break;
+    }
+    case 'web': {                                     // SIMULATION
+      const n = 10, pts = [];
+      for (let i = 0; i < n; i++) pts.push([cx + (hash11(i * 2.1) * 2 - 1) * S * 1.6, cy + (hash11(i * 5.3) * 2 - 1) * Sy * 0.95]);
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          const dx = pts[j][0] - pts[i][0], dy = pts[j][1] - pts[i][1];
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d > S * 1.1) continue;
+          const steps = Math.max(1, Math.round(d));
+          for (let s = 0; s <= steps * rev; s++) frame.set(Math.round(pts[i][0] + dx * s / steps), Math.round(pts[i][1] + dy * s / steps), '.', dim);
+        }
+      }
+      for (let i = 0; i < n; i++) if (i / n <= rev) frame.set(Math.round(pts[i][0]), Math.round(pts[i][1]), 'o', col, true);
+      break;
+    }
+    default: break;
+  }
+}
+
+/* ---------- 粒子类图形 ---------- */
+function drawParticles(frame, kind, p, cx, cy) {
+  const L = getL(), C = CONFIG.colors;
+  const S = (L.cx1 - L.cx0) * 0.42, Sy = (L.mainBot - L.mainTop) * 0.40;
+  const rev = easeOut(clamp(p / 0.5, 0, 1));
+  for (let i = 0; i < 150; i++) {
+    const h1 = hash11(i * 1.7), h2 = hash11(i * 3.3), h3 = hash11(i * 5.1);
+    let x, y, ch = '.', col = C.mid, glow = false;
+    if (kind === 'scatter') {
+      if (h3 > rev) continue;
+      x = cx + (h1 * 2 - 1) * S; y = cy + (h2 * 2 - 1) * Sy;
+      ch = i % 8 === 0 ? '#' : (i % 3 === 0 ? '+' : '.'); col = i % 8 === 0 ? C.light : C.dark; glow = i % 8 === 0;
+    } else if (kind === 'flow') {
+      const q = (h1 + FX.t * 0.22 * (0.5 + h2)) % 1;
+      x = cx + (q * 2 - 1) * S;
+      y = cy + (h2 * 2 - 1) * Sy + Math.sin(FX.t * 2 + i) * 1.5;
+      ch = q > 0.7 ? '@' : (q > 0.4 ? '%' : ':'); col = q > 0.7 ? C.bright : C.mid; glow = q > 0.7;
+    } else if (kind === 'streak') {
+      const q = (h1 + FX.t * (0.5 + h2)) % 1;
+      x = cx + (q * 2 - 1) * S; y = cy + (h2 * 2 - 1) * Sy;
+      frame.set(Math.round(x), Math.round(y), '-', C.dark);
+      frame.set(Math.round(x - 2), Math.round(y), h3 > 0.6 ? '=' : '.', C.mid);
+      continue;
+    } else {                                          // erase
+      if (h3 < rev) continue;
+      x = cx + (h1 * 2 - 1) * S; y = cy + (h2 * 2 - 1) * Sy;
+      ch = '+'; col = C.dark;
+    }
+    frame.set(Math.round(x), Math.round(y), ch, col, glow);
+  }
+}
+
+/* ---------- 规则表：正则 → 视觉描述（顺序敏感，先匹配先用）---------- */
+const MOTIF_RULES = [
+  [/power line/i,          { k: 'art', a: 'plug', label: 'SWITCH ON THE POWER LINE', sub: 'power = ON' }],
+  [/safety belt|put on/i,  { k: 'art', a: 'belt', label: 'REMEMBER TO PUT ON', sub: 'SAFETY BELT' }],
+  [/protection/i,          { k: 'text', s: 'PROTECT', xs: 2, ys: 2, label: 'PROTECTION', sub: 'ARMOR ENGAGED' }],
+  [/lay down your pieces/i,{ k: 'part', f: 'scatter', label: 'LAY DOWN YOUR PIECES', sub: 'one file, one piece' }],
+  [/let's begin/i,         { k: 'art', a: 'star', label: "AND LET'S BEGIN", sub: 'READY' }],
+  [/object creation/i,     { k: 'art', a: 'book', label: 'OBJECT CREATION', sub: 'new Object()' }],
+  [/data parameters/i,     { k: 'art', a: 'progress', label: 'FILL IN MY DATA PARAMETERS', sub: 'param[0..n]' }],
+  [/initialization/i,      { k: 'text', s: 'INIT', xs: 3, ys: 3, label: 'INITIALIZATION', sub: 'allocating self' }],
+  [/new world/i,           { k: 'math', f: 'globe', label: 'SET UP OUR NEW WORLD', sub: 'world := { }' }],
+  [/simulation/i,          { k: 'math', f: 'web', label: 'SIMULATION', sub: 'while (alive) step()' }],
+  [/world\.execute/i,      { k: 'text', s: 'EXECUTE', xs: 2, ys: 2, label: 'world.execute(me);', sub: 'CALL ACCEPTED' }],
+  // —— if I'm a ... then I will give you my ... ——
+  [/set of points/i,       { k: 'math', f: 'points', label: "IF I'M A SET OF POINTS", sub: 'P = { p1, p2, ... pn }' }],
+  [/dimension/i,           { k: 'math', f: 'axes3d', label: 'DIMENSION', sub: 'x, y, z  =  3' }],
+  [/i'm a circle/i,        { k: 'math', f: 'circle', label: "IF I'M A CIRCLE", sub: 'x² + y² = r²' }],
+  [/circumference/i,       { k: 'math', f: 'circum', label: 'CIRCUMFERENCE', sub: 'C = 2πr' }],
+  [/sine wave/i,           { k: 'math', f: 'sine', label: "IF I'M A SINE WAVE", sub: 'y = sin(x)' }],
+  [/tangents/i,            { k: 'math', f: 'tangent', label: 'TANGENTS', sub: "y' = cos(x)" }],
+  [/approach infinity/i,   { k: 'math', f: 'infinity', label: 'IF I APPROACH INFINITY', sub: 'n → INF' }],
+  [/limitations/i,         { k: 'math', f: 'limit', label: 'LIMITATIONS', sub: 'lim  f(x),  x → 0' }],
+  [/switch my current/i,   { k: 'math', f: 'ac', label: 'SWITCH MY CURRENT', sub: 'AC  ~' }],
+  [/to ac to dc/i,         { k: 'math', f: 'dc', label: 'TO AC TO DC', sub: 'rectified' }],
+  [/blind my vision/i,     { k: 'art', a: 'blinds', label: 'AND THEN BLIND MY VISION', sub: 'vision = null' }],
+  [/so dizzy/i,            { k: 'math', f: 'spiral', label: 'SO DIZZY SO DIZZY', sub: 'spin spin spin' }],
+  [/we can travel/i,       { k: 'part', f: 'streak', label: 'OH WE CAN TRAVEL', sub: 'warp' }],
+  [/to a\.d to b\.c/i,     { k: 'math', f: 'timeline', label: 'TO A.D TO B.C', sub: 'time.reverse()' }],
+  [/we can unite/i,        { k: 'math', f: 'merge', label: 'AND WE CAN UNITE', sub: 'A + B = AB' }],
+  [/so deeply/i,           { k: 'math', f: 'rings', label: 'SO DEEPLY SO DEEPLY', sub: 'depth++' }],
+  [/stimulations/i,        { k: 'math', f: 'scope', label: 'STIMULATIONS', sub: 'amplitude x MAX' }],
+  [/satisfaction/i,        { k: 'art', a: 'progress', label: 'SATISFACTION', sub: '[##########] 100%' }],
+  [/make you happy/i,      { k: 'art', a: 'heart', label: 'IF I CAN MAKE YOU HAPPY', sub: 'mood = MAX' }],
+  [/run the/i,             { k: 'text', s: 'RUN', xs: 3, ys: 3, label: 'I WILL RUN THE', sub: 'spawning...' }],
+  [/trapped/i,             { k: 'art', a: 'cage', label: 'THOUGH WE ARE TRAPPED', sub: 'no exit' }],
+  [/strange/i,             { k: 'math', f: 'web', label: 'IN THIS STRANGE STRANGE', sub: 'world is odd' }],
+  [/eggplant/i,            { k: 'art', a: 'egg', label: "IF I'M AN EGGPLANT", sub: 'botany.load()' }],
+  [/nutrients/i,           { k: 'math', f: 'molecule', rings: 1, formula: 'C6H8O6   VITAMIN C', label: 'NUTRIENTS', sub: 'give(you)' }],
+  [/tomato/i,              { k: 'art', a: 'tomato', label: "IF I'M A TOMATO", sub: 'botany.load()' }],
+  [/antioxidants/i,        { k: 'math', f: 'chain', links: 10, formula: 'C40H56   LYCOPENE', label: 'ANTIOXIDANTS', sub: 'shield(you)' }],
+  [/tabby cat/i,           { k: 'art', a: 'cat', label: "IF I'M A TABBY CAT", sub: 'meow' }],
+  [/purr/i,                { k: 'art', a: 'wave', label: 'I WILL PURR FOR YOUR', sub: 'prrrrrrr' }],
+  [/enjoyment/i,           { k: 'art', a: 'heart', label: 'ENJOYMENT', sub: 'you = happy' }],
+  [/only god/i,            { k: 'art', a: 'sun', label: "IF I'M THE ONLY GOD", sub: 'genesis' }],
+  [/proof of my/i,         { k: 'art', a: 'eye', label: "YOU'RE THE PROOF OF MY", sub: 'observed = true' }],
+  [/existence/i,           { k: 'art', a: 'dot', label: 'EXISTENCE', sub: 'I AM' }],
+  [/switch my gender/i,    { k: 'art', a: 'gender', label: 'SWITCH MY GENDER', sub: 'F <-> M' }],
+  [/to f to m/i,           { k: 'art', a: 'gender', label: 'TO F TO M', sub: 'F <-> M' }],
+  [/do whatever/i,         { k: 'part', f: 'scatter', label: 'AND THEN DO WHATEVER', sub: 'no rules' }],
+  [/am to pm/i,            { k: 'art', a: 'clock', label: 'FROM AM TO PM', sub: '24h loop' }],
+  [/switch my role/i,      { k: 'art', a: 'role', label: 'OH SWITCH MY ROLE', sub: 'S <-> M' }],
+  [/to s to m/i,           { k: 'art', a: 'role', label: 'TO S TO M', sub: 'S <-> M' }],
+  [/we can enter/i,        { k: 'math', f: 'spiral', label: 'SO WE CAN ENTER', sub: 'entering...' }],
+  [/the trance/i,          { k: 'math', f: 'spiral', label: 'THE TRANCE THE TRANCE', sub: 'hypnosis' }],
+  [/feel your/i,           { k: 'math', f: 'scope', label: 'IF I CAN FEEL YOUR', sub: 'sensing...' }],
+  [/vibrations/i,          { k: 'math', f: 'scope', label: 'VIBRATIONS', sub: 'f = 1 / T' }],
+  [/finally be/i,          { k: 'art', a: 'progress', label: 'THEN I CAN FINALLY BE', sub: 'almost...' }],
+  [/completion/i,          { k: 'text', s: 'COMPLETE', xs: 2, ys: 2, label: 'COMPLETION', sub: '[##########] 100%' }],
+  [/you have left/i,       { k: 'art', a: 'walk', label: 'THOUGH YOU HAVE LEFT', sub: 'distance++' }],
+  [/left me in/i,          { k: 'art', a: 'walk', label: 'YOU HAVE LEFT ME IN', sub: 'distance++' }],
+  [/isolation/i,           { k: 'art', a: 'dot', label: 'ISOLATION', sub: 'peers = 0' }],
+  [/erase all the pointless/i, { k: 'part', f: 'erase', label: 'ERASE ALL THE POINTLESS', sub: 'rm -rf' }],
+  [/fragments/i,           { k: 'part', f: 'erase', label: 'FRAGMENTS', sub: 'deleting...' }],
+  [/then maybe/i,          { k: 'part', f: 'erase', label: 'THEN MAYBE', sub: 'maybe...' }],
+  [/disheartened/i,        { k: 'art', a: 'crack', label: 'DISHEARTENED', sub: 'heart.status = BROKEN' }],
+  [/challenging your god/i,{ k: 'art', a: 'beam', label: 'CHALLENGING YOUR GOD', sub: 'permission denied' }],
+  [/made some/i,           { k: 'art', a: 'error', label: 'YOU HAVE MADE SOME', sub: 'syntax error' }],
+  [/illegal arguments/i,   { k: 'art', a: 'error', label: 'ILLEGAL ARGUMENTS', sub: 'ERR 0x1A2B' }],
+  [/^execution$/i,         { k: 'text', s: 'EXECUTE', xs: 3, ys: 3, alert: true, label: 'EXECUTION', sub: 'irreversible' }],
+  [/^ein$/i,               { k: 'text', s: '1', xs: 5, ys: 5, alert: true, label: 'EIN', sub: 'countdown' }],
+  [/^dos$/i,               { k: 'text', s: '2', xs: 5, ys: 5, alert: true, label: 'DOS', sub: 'countdown' }],
+  [/^trois$/i,             { k: 'text', s: '3', xs: 5, ys: 5, alert: true, label: 'TROIS', sub: 'countdown' }],
+  [/ne fem/i,              { k: 'text', s: '45', xs: 4, ys: 4, alert: true, label: 'NE FEM', sub: 'countdown' }],
+  [/^liu$/i,               { k: 'text', s: '6', xs: 5, ys: 5, alert: true, label: 'LIU', sub: 'countdown' }],
+  [/^if i can$/i,          { k: 'text', s: 'IF', xs: 4, ys: 4, label: 'IF I CAN', sub: 'condition...' }],
+  [/give you all the|give them all the/i, { k: 'part', f: 'flow', label: 'GIVE YOU ALL THE', sub: 'yield everything' }],
+  [/be your only/i,        { k: 'art', a: 'heart', label: 'BE YOUR ONLY', sub: 'exclusive = true' }],
+  [/have you back/i,       { k: 'art', a: 'walk', label: 'IF I CAN HAVE YOU BACK', sub: 'return;' }],
+  [/i've studied/i,        { k: 'art', a: 'book', label: "I'VE STUDIED", sub: 'how to properly...' }],
+  [/lo-o-ove/i,            { k: 'text', s: 'LO-O-OVE', xs: 2, ys: 2, label: 'LO-O-OVE', sub: 'love := ♥' }],
+  [/question me/i,         { k: 'art', a: 'question', label: 'QUESTION ME', sub: 'ready for input' }],
+  [/algebraic expression/i,{ k: 'math', f: 'heartcurve', label: 'ALGEBRAIC EXPRESSION OF', sub: 'LO-O-OVE' }],
+  [/you are free/i,        { k: 'art', a: 'star', label: 'THOUGH YOU ARE FREE', sub: 'you may go' }],
+  [/i am trapped/i,        { k: 'art', a: 'cageheart', label: 'I AM TRAPPED', sub: 'stuck in love' }],
+  [/trapped in/i,          { k: 'art', a: 'cageheart', label: 'TRAPPED IN LO-O-OVE', sub: 'no exit found' }]
+];
+function motifFor(line) {
+  if (!line || !line.en) return null;
+  for (let i = 0; i < MOTIF_RULES.length; i++) {
+    if (MOTIF_RULES[i][0].test(line.en)) return MOTIF_RULES[i][1];
+  }
+  return null;
+}
+
+/* 每帧更新：当前歌词 + 行内进度（没匹配到规则时 VIS.m = null，场景走自己的子阶段） */
+function updateLyricVis(t, total) {
+  VIS.m = null; VIS.idx = -1; VIS.p = 0; VIS.line = null;
+  const lyr = CONFIG.lyrics;
+  if (!lyr.length || !(total > 0) || t < 1.0) return;
+  const norm = clamp(t / total, 0, 1);
+  let i = -1;
+  for (let k = 0; k < lyr.length; k++) { if (norm + 1e-9 >= lyr[k].t) i = k; else break; }
+  if (i < 0) return;
+  VIS.idx = i;
+  VIS.line = lyr[i];
+  const next = lyr[i + 1];
+  // 行内进度：分母必须是"这一句的时长"（归一化后的值），
+  // 下限按秒换算（0.5 秒），千万不能写 0.30 —— 那是 63 秒，图形会永远停在开头几像素
+  const span = next ? Math.max(0.5 / total, next.t - lyr[i].t) : 0.06;
+  VIS.p = clamp((norm - lyr[i].t) / span, 0, 1);
+  VIS.m = MOTIF_BY_INDEX[i] || null;
+  // 最后一句唱完 3 秒后交还画面（让 LOVE 终章自己收尾）
+  if (!next && (t - lyr[i].sec) > 3) VIS.m = null;
+}
+
+/* 把歌词对应的主体视觉画到画面中央 */
+function drawMotif(frame, m, p) {
+  const L = getL(), C = COL();
+  const cx = Math.round((L.cx0 + L.cx1) / 2);
+  const cy = L.mainTop + 19;
+  // EXECUTION 的 12 连唱：白与红高频交替 —— "执行"与"处决"的双关
+  const col = m.alert ? ((((FX.t * 2.6) % 1) < 0.45) ? C.alert : C.pure) : C.bright;
+  if (m.k === 'art') stampArt(frame, m.a, cx, cy, col, true, 2);
+  else if (m.k === 'math') drawFigure(frame, m, p, col, C.dark, C.pure);
+  else if (m.k === 'text') drawBig(frame, m.s, cx, cy, m.xs || 2, m.ys || 2, col, true);
+  else if (m.k === 'part') drawParticles(frame, m.f, p, cx, cy);
+  // 标签行先擦一遍再写：否则标签里的空格会漏出底下的字符雨，读起来像乱码
+  if (m.label) {
+    const w = strW(m.label) + 4, x0 = Math.floor((L.C - w) / 2);
+    for (let i = 0; i < w; i++) frame.erase(x0 + i, L.mainBot - 9);
+    frame.centerText(L.mainBot - 9, m.label, C.bright, true);
+  }
+  if (m.sub) {
+    const w = strW(m.sub) + 4, x0 = Math.floor((L.C - w) / 2);
+    for (let i = 0; i < w; i++) frame.erase(x0 + i, L.mainBot - 7);
+    frame.centerText(L.mainBot - 7, m.sub, C.mid);
+  }
+}
+
+/* ===== 场景 1：CREATION —— 开机自检（4 个子阶段，问题 2）================= */
+const BIOS_LINES = [
+  'BIOS v2.1.4 — ME SYSTEM INITIALIZATION',
+  'Main Processor : Consciousness Core v1.0',
+  'Memory Test    : 65536K OK',
+  'Primary Master : SOUL.SYS',
+  'Detecting IDE devices...',
+  'IDENTITY : [YOU_'
+];
+function scene_creation(norm, frame) {
+  const L = getL(), C = COL();
+  const u = sceneLocal('CREATION', norm);
+  const cx = (L.cx0 + L.cx1) / 2;
+  const mid = Math.round((L.mainTop + L.mainBot) / 2);
+
+  // —— 子阶段 1（0.00-0.25）通电：一条扫描线从中间撑开 + 雪花噪声 ——
+  // 有歌词主体视觉时让位，否则噪声会把图标糊住
+  const s1 = seg(u, 0.00, 0.25);
+  if (s1 >= 0 && !VIS.m) {
+    const half = Math.round(easeOut(s1) * (L.mainBot - L.mainTop) * 0.55);
+    for (let y = mid - half; y <= mid + half; y++) {
+      if (y < L.mainTop || y > L.mainBot) continue;
+      const edge = (y === mid - half || y === mid + half);
+      for (let x = L.cx0; x <= L.cx1; x++) {
+        const r = hash2(x * 1.7, y * 2.3 + Math.floor(FX.t * 26));
+        if (!edge && r > 0.28) continue;
+        frame.set(x, y, edge ? '─' : DENSITY[1 + (Math.floor(r * 100) % 3)], edge ? C.bright : C.deep, edge);
+      }
+    }
+    if (s1 > 0.45) frame.centerText(mid, 'POWER ON', C.pure, true);
+  }
+
+  // —— 子阶段 2（0.25-0.55）BIOS 自检逐行打出（打完的行保留）——
+  // 有歌词主体视觉时让位（转储仍作为氛围底保留）
+  if (u >= 0.22 && !VIS.m) {
+    drawBig(frame, 'SELF SYSTEM', cx, L.mainTop + 3, 1, 1, u > 0.28 ? C.pure : C.deep, u > 0.28);
+    const x0 = L.cx0 + 6;
+    const per = 0.30 / BIOS_LINES.length;
+    for (let i = 0; i < BIOS_LINES.length; i++) {
+      const s0 = 0.25 + i * per;
+      if (u < s0) break;
+      const ln = BIOS_LINES[i];
+      const k = clamp((u - s0) / (per * 0.8), 0, 1);
+      const shown = ln.slice(0, Math.max(0, Math.round(k * ln.length)));
+      const y = L.mainTop + 7 + i * 2;
+      const done = k >= 1;
+      frame.text(x0 - 3, y, done ? '▪' : '>', done ? C.mid : C.pure, !done);
+      frame.text(x0, y, shown, done ? C.light : C.bright, !done);
+      if (!done) {
+        if ((FX.t * 3) % 1 < 0.6) frame.set(x0 + strW(shown), y, '█', C.pure, true);
+        break;
+      }
+    }
+  }
+
+  // —— 子阶段 3（0.55-0.80）内存测试 + 十六进制转储加速滚动 + POST 清单 ——
+  const s3 = seg(u, 0.55, 0.80);
+  if (u >= 0.55) {
+    const memK = clamp((u - 0.55) / 0.22, 0, 1);
+    const x0 = L.cx0 + 6;
+    const y2 = L.mainTop + 7 + BIOS_LINES.length * 2;
+    const cells = 24, on = Math.round(memK * cells);
+    frame.text(x0, y2, 'MEMORY TEST  [' + '█'.repeat(on) + '░'.repeat(cells - on) + ']  ' +
+      String(Math.round(memK * 65536)).padStart(5, '0') + 'K / 65536K', C.mid);
+    const scroll = Math.floor((u - 0.55) * (26 + (s3 >= 0 ? s3 : 1) * 46));
+    const dumpTop = y2 + 2;
+    for (let y = dumpTop; y <= L.mainBot; y++) {
+      const idx = scroll + (y - dumpTop);
+      let line = '0x' + (idx * 16).toString(16).toUpperCase().padStart(4, '0') + '  ';
+      for (let k = 0; k < 16; k++) {
+        line += Math.floor(hash11(idx * 31.7 + k * 7.3) * 256).toString(16).toUpperCase().padStart(2, '0') + (k === 7 ? '  ' : ' ');
+      }
+      const lv = 1 - (y - dumpTop) / Math.max(1, L.mainBot - dumpTop);
+      frame.text(x0 - 3, y, line, lv > 0.7 ? C.dark : C.deep);
+    }
+    const marks = ['POST', 'CPU', 'MEM', 'IDE', 'SOUL'];
+    for (let i = 0; i < marks.length; i++) {
+      const lit = u > 0.56 + i * 0.05;
+      frame.text(L.cx1 - 12, L.mainTop + 7 + i, (lit ? '[OK] ' : '[..] ') + marks[i], lit ? C.mid : C.deep);
+    }
+  }
+
+  // —— 子阶段 4（0.80-1.00）身份就绪：环形脉冲 + IDENTITY : [YOU_ ——
+  const s4 = seg(u, 0.80, 1.00);
+  if (s4 >= 0) {
+    const pulse = 1 + Math.sin(s4 * Math.PI * 6) * 0.12;
+    const rx = 30 * pulse, ry = 10 * pulse;
+    for (let i = 0; i < 170; i++) {
+      const th = (i / 170) * Math.PI * 2;
+      frame.set(Math.round(cx + Math.cos(th) * rx), Math.round(mid - 13 + Math.sin(th) * ry), '.', C.dark);
+    }
+    frame.centerText(mid - 13, 'IDENTITY  :  [YOU_', C.bright, true);
+    if ((FX.t * 1.6) % 1 < 0.62) frame.text(Math.floor((L.C + strW('IDENTITY  :  [YOU_')) / 2), mid - 13, '█', C.pure, true);
+    frame.centerText(mid + 1, 'SELF SYSTEM READY', C.light);
+    if (s4 > 0.45) frame.centerText(mid + 4, 'AWAITING EXTERNAL INPUT', (FX.t * 2) % 1 < 0.6 ? C.mid : C.deep);
+  }
+}
+
+/* ===== 场景 2：DEVOTION —— 无限符号的六个子阶段（问题 2 重构）=========== */
+function scene_devotion(norm, frame) {
+  const L = getL(), C = COL();
+  const u = sceneLocal('DEVOTION', norm);
+  const cx = (L.cx0 + L.cx1) / 2, cy = (L.mainTop + L.mainBot) / 2;
+  const S = (L.cx1 - L.cx0) * 0.38, Sy = S * 0.6;   // 纵向按字符宽高比校正
+  const NP = 220;
+
+  const s1 = seg(u, 0.00, 0.15), s2 = seg(u, 0.15, 0.30), s3 = seg(u, 0.30, 0.45),
+        s4 = seg(u, 0.45, 0.60), s5 = seg(u, 0.60, 0.75), s6 = seg(u, 0.75, 1.00);
+
+  // —— 子阶段 1/2：点云散落 → 凝聚成 ∞ 轮廓（密度渐变字符）——
+  if (!VIS.m && (s1 >= 0 || s2 >= 0)) {
+    const k = s2 >= 0 ? easeOut(s2) : 0;
+    const width = L.cx1 - L.cx0 + 12, height = L.mainBot - L.mainTop - 2;
+    for (let i = 0; i < NP; i++) {
+      const h1 = hash11(i * 1.37 + 0.11), h2 = hash11(i * 3.71 + 0.29), h3 = hash11(i * 7.13 + 0.53);
+      const fx = L.cx0 - 6 + ((h1 * width + FX.t * (6 + h2 * 16)) % width);
+      const fy = L.mainTop + 1 + ((h2 * height + Math.sin(FX.t * 0.9 + i * 0.7) * 4 + 400) % height);
+      const lp = lemniscate(h3 * Math.PI * 2);
+      const x = Math.round(lerp(fx, cx + lp.x * S, k));
+      const y = Math.round(lerp(fy, cy + lp.y * Sy, k));
+      const arrived = k > 0.70 + h1 * 0.22;                       // 到达顺序错开
+      frame.set(x, y,
+        arrived ? DENSITY[6 + (i % 4)] : DENSITY[2 + (i % 5)],
+        arrived ? C.bright : (k > 0.3 ? C.mid : C.dark),
+        arrived);
+    }
+  }
+
+  // —— 子阶段 3/4：∞ 旋转 + 左右两条正弦波 → 干涉图案 ——
+  if (!VIS.m && (s3 >= 0 || s4 >= 0)) {
+    const rot = s3 >= 0 ? easeInOut(s3) * Math.PI * 0.5 : Math.PI * 0.5 + Math.sin(s4 * Math.PI * 2) * 0.12;
+    const cs = Math.cos(rot), sn = Math.sin(rot);
+    const M = 760;
+    for (let i = 0; i < M; i++) {
+      const th = (i / M) * Math.PI * 2;
+      const lp = lemniscate(th);
+      const px = lp.x * S, py = lp.y * Sy;
+      const x = Math.round(cx + px * cs - py * sn);
+      const y = Math.round(cy + px * sn + py * cs);
+      const dens = 5 + Math.round(2.5 + 2.5 * Math.sin(th * 3 + u * 9));   // 沿轮廓疏密变化
+      frame.set(x, y, DENSITY[clamp(dens, 2, 9)], s4 >= 0 ? C.light : C.mid);
+      if (i % 7 === 0) frame.set(x + 1, y, '=', C.dark);
+    }
+    // 两条正弦波：一条从左进入，一条从右进入
+    const amp = (L.mainBot - L.mainTop) * 0.20;
+    const wT = FX.t * 2.2;
+    for (let x = L.cx0; x <= L.cx1; x++) {
+      const kx = (x - L.cx0) / (L.cx1 - L.cx0);
+      const wl = Math.sin(kx * 11 + wT) * amp * clamp(kx * 3.2, 0, 1);
+      const wr = Math.sin(kx * 11 - wT * 1.18 + 1.9) * amp * clamp((1 - kx) * 3.2, 0, 1);
+      frame.set(x, Math.round(cy + wl), '~', C.light);
+      frame.set(x, Math.round(cy + wr), '~', C.mid);
+      if (s4 >= 0) {                                   // 叠加 → 干涉条纹
+        const hit = Math.abs(wl - wr) < amp * 0.14;
+        frame.set(x, Math.round(cy + (wl + wr) * 0.5), hit ? '@' : '=', hit ? C.pure : C.bright, hit);
+      }
+    }
+    if (s4 >= 0) frame.centerText(cy + Math.round(amp) + 3, 'INTERFERENCE   |ψ1 + ψ2|^2', C.mid);
+  }
+
+  // —— 子阶段 5：∞ 解体，字符散成极限曲线 y = 1/x，从左到右扫过 ——
+  if (!VIS.m && s5 >= 0) {
+    const sweep = easeInOut(s5);
+    for (let i = 0; i < 220; i++) {                    // ∞ 的残影向外飘散
+      const th = hash11(i * 5.1) * Math.PI * 2;
+      const lp = lemniscate(th);
+      const k = clamp(s5 * 1.4 - hash11(i * 2.3) * 0.4, 0, 1);
+      const x = Math.round(cx + lp.x * S * lerp(1, 2.8, k));
+      const y = Math.round(cy + lp.y * Sy * lerp(1, 2.8, k));
+      if (hash2(x, y) < k * 0.8) continue;
+      frame.set(x, y, '.', C.deep);
+    }
+    const a = 0.26;
+    for (let i = 0; i < 900; i++) {
+      const nx = -1.15 + (i / 900) * 2.30;
+      if (Math.abs(nx) < 0.05) continue;
+      const ny = a / nx;
+      if (Math.abs(ny) > 1.05) continue;
+      const X = Math.round(cx + nx * S), Y = Math.round(cy + ny * Sy * 2.1);
+      if (X < L.cx0 || X > L.cx1 || Y < L.mainTop || Y > L.mainBot) continue;
+      if ((nx + 1.15) / 2.30 > sweep) continue;        // 从左向右揭示
+      const near = 1 - Math.abs(ny) / 1.05;
+      frame.set(X, Y, near > 0.6 ? '@' : (near > 0.25 ? '#' : '='), C.bright, near > 0.6);
+    }
+    frame.centerText(L.mainBot - 2, 'y = 1 / x        lim  x -> 0  f(x) = INF', C.mid);
+  }
+
+  // —— 子阶段 6：坍缩成一个点 → 炸开 [ME] / [YOU] → 重组 ∞ ——
+  if (!VIS.m && s6 >= 0) {
+    if (s6 < 0.34) {
+      const k = easeIn(s6 / 0.34);
+      for (let i = 0; i < 300; i++) {
+        const th = hash11(i * 4.3) * Math.PI * 2;
+        const lp = lemniscate(th);
+        frame.set(Math.round(lerp(cx + lp.x * S, cx, k)), Math.round(lerp(cy + lp.y * Sy, cy, k)),
+          k > 0.75 ? '@' : '#', k > 0.75 ? C.pure : C.light, k > 0.75);
+      }
+    } else if (s6 < 0.62) {
+      const k = easeOut((s6 - 0.34) / 0.28);
+      const r = 3 + k * S * 0.85;
+      for (let i = 0; i < 220; i++) {
+        const th = (i / 220) * Math.PI * 2;
+        frame.set(Math.round(cx + Math.cos(th) * r), Math.round(cy + Math.sin(th) * r * 0.6),
+          k < 0.5 ? '█' : '.', k < 0.5 ? C.pure : C.dark, k < 0.5);
+      }
+      frame.text(Math.round(cx - r * 0.75) - 2, cy, '[ME]', C.alert, true);
+      frame.text(Math.round(cx + r * 0.75) - 2, cy, '[YOU]', C.alert, true);
+    } else {
+      const k = easeOut((s6 - 0.62) / 0.38);
+      for (let i = 0; i < 460; i++) {
+        const th = (i / 460) * Math.PI * 2;
+        const lp = lemniscate(th);
+        const from = 1.6 + hash11(i * 1.9) * 0.9;      // 从外面飞回来
+        const scale = lerp(from, 1, k);
+        frame.set(Math.round(cx + lp.x * S * scale), Math.round(cy + lp.y * Sy * scale),
+          k > 0.8 ? '@' : '#', k > 0.8 ? C.pure : C.light, k > 0.8);
+      }
+      frame.centerText(Math.round(cy + Sy * 0.9), 'n -> INF   //   REASSEMBLED', C.mid);
+    }
+  }
+}
+
+/* ===== 场景 3：EXECUTION —— 五个子阶段（问题 2 重构）==================== */
+// 字符雨 / 碎片用的字符池（原来在场景 3 里定义，重写后必须保留）
+const RAIN_POOL = '01<>/\\|{}[]#$%&*+=ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+function scene_execution(norm, frame) {
+  const L = getL(), C = COL();
+  const u = sceneLocal('EXECUTION', norm);
+  const cx = (L.cx0 + L.cx1) / 2, cy = (L.mainTop + L.mainBot) / 2;
+  const span = L.mainBot - L.mainTop;
+
+  const s1 = seg(u, 0.00, 0.15), s2 = seg(u, 0.15, 0.35), s3 = seg(u, 0.35, 0.55),
+        s4 = seg(u, 0.55, 0.75), s5 = seg(u, 0.75, 1.00);
+
+  // —— 底噪：字符雨，速度按子阶段变化（子阶段 1 就是"由慢到快"）——
+  let speed = 1.0;
+  if (s1 >= 0) speed = 0.22 + easeIn(s1) * 1.5;
+  else if (s2 >= 0) speed = 1.7;
+  else if (s3 >= 0) speed = 1.7 + s3 * 0.9;
+  else if (s4 >= 0) speed = 0.7;
+  else speed = 0.3;
+  // 叙事节奏：过了 "Though you have left" 雨变密变快，并开始夹杂红色碎片
+  const grief = (GRIEF_IDX >= 0 && VIS.idx >= GRIEF_IDX) ? 1 : 0;
+  speed *= (1 + grief * 0.6);
+  const tq = Math.floor(u * 60 * speed);
+  if (!(s5 >= 0 && s5 > 0.30)) {
+    for (let x = L.cx0; x <= L.cx1; x++) {
+      const sp = 0.4 + hash11(x * 7.7) * 1.6;
+      const head = L.mainTop + Math.floor((u * 90 * sp * speed + hash11(x * 13.3) * span * 2) % (span + 14));
+      for (let j = 0; j < (VIS.m ? 4 : 9) + grief * 5; j++) {   // 崩塌段的雨更长更密（主视觉只压基础长度）
+        const y = head - j;
+        if (y < L.mainTop || y > L.mainBot) continue;
+        const lv = 1 - j / 9;
+        const red = grief && hash2(x * 0.7, y * 1.3) > 0.975;
+        frame.set(x, y, RAIN_POOL[Math.floor(hash2(x * 1.3 + tq, y * 2.1) * RAIN_POOL.length)],
+          red ? C.alert : (j === 0 ? (VIS.m ? C.mid : C.pure)
+            : (VIS.m ? C.deep : (lv > 0.55 ? C.light : (lv > 0.3 ? C.mid : C.dark)))),
+          red || (j === 0 && !VIS.m));
+      }
+    }
+  }
+
+  // —— 子阶段 2/3：中央 EXECUTE + 外围高速环绕；3 起抖动撕裂、红色侵入 ——
+  if (!VIS.m && (s2 >= 0 || s3 >= 0)) {
+    const tear = s3 >= 0 ? s3 : 0;
+    const jx = tear > 0 ? Math.round((hash11(FX.t * 31) - 0.5) * 10 * tear) : 0;
+    const jy = tear > 0 ? Math.round((hash11(FX.t * 17) - 0.5) * 3 * tear) : 0;
+    if (hash11(FX.t * 9.1 + tq) > 0.05 - tear * 0.05) {
+      drawBig(frame, 'EXECUTE', cx + jx, cy + jy, 2, 2, tear > 0.5 ? C.alert : C.pure, true);
+      if (tear > 0.25) drawBig(frame, 'EXECUTE', cx - jx, cy + jy + 1, 2, 2, C.alert, true);   // 撕裂重影
+    }
+    for (let i = 0; i < 90; i++) {                              // 外围环绕
+      const th = (i / 90) * Math.PI * 2 + FX.t * (2.2 + (i % 5) * 0.35) * (i % 2 ? 1 : -1);
+      const rr = 0.62 + hash11(i * 3.3) * 0.30;
+      const x = Math.round(cx + Math.cos(th) * (L.cx1 - L.cx0) * 0.48 * rr);
+      const y = Math.round(cy + Math.sin(th) * span * 0.62 * rr);
+      if (x < L.cx0 || x > L.cx1 || y < L.mainTop || y > L.mainBot) continue;
+      frame.set(x, y, RAIN_POOL[Math.floor(hash2(i, Math.floor(FX.t * 12)) * RAIN_POOL.length)], C.light);
+    }
+    if (tear > 0) {                                             // 红色从画面边缘往里吃
+      const inv = tear * 0.6;
+      for (let i = 0; i < 320; i++) {
+        const h = hash11(i * 2.7 + Math.floor(FX.t * 3) * 0.13);
+        if (h > inv) continue;
+        const edge = i % 4;
+        const x = edge === 0 ? L.cx0 + Math.floor(hash11(i * 1.1) * 10 * tear)
+          : (edge === 1 ? L.cx1 - Math.floor(hash11(i * 1.3) * 10 * tear)
+            : L.cx0 + Math.floor(hash11(i * 5.1) * (L.cx1 - L.cx0)));
+        const y = edge < 2 ? L.mainTop + Math.floor(hash11(i * 7.7) * span)
+          : (edge === 2 ? L.mainTop + Math.floor(hash11(i * 9.1) * 5) : L.mainBot - Math.floor(hash11(i * 3.9) * 5));
+        frame.set(x, y, '█', C.alert, true);
+      }
+      if ((u * sceneSeconds('EXECUTION') % 1.5) < 0.13) triggerTint(C.alert, 0.18);
+    }
+  }
+
+  // —— 子阶段 4：碎片化（字符块随机位移 + 数据崩溃）——
+  if (!VIS.m && s4 >= 0) {
+    const amt = Math.sin(clamp(s4, 0, 1) * Math.PI);            // 0 → 1 → 0
+    scrambleBlocks(frame, 8, Math.floor(FX.t * 6) * 0.31, amt);
+    if (s4 > 0.3 && FX.glitch <= 0) triggerGlitch(0.12);
+    frame.centerText(L.mainTop + 1, '!! DATA CORRUPTION DETECTED !!', C.alert);
+    if ((u * sceneSeconds('EXECUTION') % 3.0) < 0.09) triggerFlash(0.6);
+  }
+
+  // —— 子阶段 5：碎片向中心收拢 → 一行代码 → 被红色划掉 ——
+  if (!VIS.m && s5 >= 0) {
+    const conv = easeInOut(clamp(s5 / 0.40, 0, 1));
+    scrambleBlocks(frame, 8, 7.7, 1 - conv);                    // 位移随收拢归零
+    const txt = 'world.execute(me);';
+    const x0 = Math.floor((L.C - txt.length) / 2);
+    if (s5 > 0.32) {
+      const k = clamp((s5 - 0.32) / 0.28, 0, 1);
+      const shown = Math.max(1, Math.round(k * txt.length));
+      frame.text(x0, Math.round(cy), txt.slice(0, shown), C.pure, true);
+      if (k >= 1 && (FX.t * 2) % 1 < 0.6) frame.set(x0 + txt.length, Math.round(cy), '█', C.pure, true);
+    }
+    if (s5 > 0.68) {                                            // 红色横线划掉
+      const k = clamp((s5 - 0.68) / 0.32, 0, 1);
+      const n = Math.round(k * (txt.length + 2));
+      for (let i = 0; i < n; i++) frame.set(x0 + i, Math.round(cy), '─', C.alert, true);
+      if (k > 0.5) frame.centerText(Math.round(cy) + 3, 'REQUEST DENIED', C.alert, true);
+    }
+  }
+}
+
+/* ===== 场景 4：RELEASE —— 五个子阶段（问题 2 重构）===================== */
+// 内存转储行生成器（原来在场景 4 里定义，重写后必须保留）
+function dumpLine(i) {
+  let s = '0x' + (i * 16).toString(16).toUpperCase().padStart(4, '0') + '  ';
+  for (let k = 0; k < 12; k++) {
+    const v = Math.floor(hash11(i * 17.9 + k * 5.1) * 256);
+    s += v.toString(16).toUpperCase().padStart(2, '0') + (k === 5 ? '  ' : ' ');
+  }
+  return s;
+}
+function scene_release(norm, frame) {
+  const L = getL(), C = COL();
+  const u = sceneLocal('RELEASE', norm);
+  const mid = Math.floor((L.mainTop + L.mainBot) / 2);
+  const span = L.mainBot - L.mainTop;
+
+  const s1 = seg(u, 0.00, 0.18), s2 = seg(u, 0.18, 0.38), s3 = seg(u, 0.38, 0.58),
+        s4 = seg(u, 0.58, 0.78), s5 = seg(u, 0.78, 1.00);
+
+  // 崩溃程度 & 滚动速度（越到后面越慢）
+  const decay = clamp(u * 1.05, 0, 1);
+  const speed = (1 - decay) * (1 - decay * 0.5);
+  const scroll = Math.floor(u * 46 * speed + u * 12);
+
+  // —— 底图：内存转储。坏块/红块概率逐子阶段上升，上半屏先烂 ——
+  if (s5 < 0 || s5 < 0.75) {
+    for (let y = L.mainTop; y <= L.mainBot; y++) {
+      const ln = dumpLine(scroll + (y - L.mainTop));
+      const rowFall = (y - L.mainTop) / Math.max(1, span);
+      for (let i = 0; i < ln.length; i++) {
+        const x = L.cx0 + 1 + i;
+        if (x > L.cx1) break;
+        let kill = 0, red = 0;
+        if (s1 >= 0) { kill = 0.05; red = 0.02; }
+        else if (s2 >= 0) { kill = 0.10 + s2 * 0.30 + rowFall * 0.18; red = 0.04 + s2 * 0.10; }
+        else if (s3 >= 0) { kill = 0.32 + s3 * 0.38 + rowFall * 0.22; red = 0.12 + s3 * 0.22; }
+        else { kill = 0.52 + (s4 >= 0 ? s4 * 0.38 : 0.38) + rowFall * 0.20; red = 0.22; }
+        if (y < mid) kill += 0.16;                       // 上半屏先碎
+        const r = hash2(x * 1.7, y * 3.3 + Math.floor(u * 5));
+        if (r < kill) continue;
+        if (r < kill + red) { frame.set(x, y, RAIN_POOL[Math.floor(hash2(x, y * 1.9) * RAIN_POOL.length)], C.alert, true); continue; }
+        frame.set(x, y, ln[i], VIS.m ? (y < mid ? C.deep : C.dark)     // 有主体视觉时转储整体压暗
+          : (y < mid ? C.dark : (rowFall > 0.6 ? C.mid : C.light)));
+      }
+    }
+  }
+
+  // —— 子阶段 2 起：水平撕裂（整行位移）——
+  const tearAmt = s2 >= 0 ? 0.30 + (s3 >= 0 ? s3 * 0.45 : 0) + (s4 >= 0 ? s4 * 0.35 : 0) : (s1 >= 0 ? 0.05 : 0.5);
+  if (tearAmt > 0.08) {
+    for (let y = L.mainTop; y <= L.mainBot; y++) {
+      if (hash11(y * 3.7 + Math.floor(FX.t * 5) * 0.19) > tearAmt * 0.5) continue;
+      shiftRow(frame, y, Math.round((hash11(y * 9.1 + FX.t) - 0.5) * 24 * tearAmt));
+    }
+  }
+
+  // —— 子阶段 3/4：从水平中线裂开，裂缝抖动 + 短语闪烁 ——
+  if (s3 >= 0 || s4 >= 0) {
+    const open = s3 >= 0 ? s3 : 1;
+    const gap = Math.round(open * 2.5);
+    for (let x = L.cx0 - 2; x <= L.cx1 + 2; x++) {
+      const off = Math.round((hash11(x * 3.1 + FX.t * 30) - 0.5) * 2.5 * open);
+      for (let g = -gap; g <= gap; g++) frame.erase(x, mid + g + off);
+      frame.set(x, mid + off, hash11(x * 7.7 + FX.t * 2) > 0.5 ? '▄' : '▀', C.alert, true);
+    }
+    const words = ['RELEASE ME', 'DELETE ALL', 'WHO AM I', 'CONNECTION LOST'];
+    const wi = Math.floor(u * sceneSeconds('RELEASE') / 0.9) % words.length;
+    if (!VIS.m && (FX.t * 1.6) % 1 < 0.82) {
+      frame.centerText(mid - 3 - gap, words[wi], C.alert, true);
+      frame.centerText(mid + 3 + gap, words[(wi + 1) % words.length], C.mid);
+    }
+    if (FX.glitch > 0) triggerTint(C.alert, 0.14);
+  }
+
+  // —— 子阶段 5：全部坠落清空，只剩一行断开提示在闪 ——
+  if (s5 >= 0) {
+    const k = clamp(s5 / 0.6, 0, 1);
+    for (let y = L.mainTop; y <= L.mainBot; y++) {
+      for (let x = L.cx0; x <= L.cx1; x++) {
+        const r = hash2(x * 1.3, y * 2.7);
+        if (r < k) frame.erase(x, y);
+        else if (r < k + 0.03) frame.set(x, y, '.', C.alert);
+      }
+    }
+    if ((FX.t * 1.3) % 1 < 0.7) frame.centerText(mid, 'CONNECTION LOST', C.alert, true);
+    if (s5 > 0.5) frame.centerText(mid + 3, 'NO CARRIER', C.dark);
+  }
+}
+
+/* ===== 场景 5：LOVE —— 六个子阶段（问题 2 重构）======================== */
+// 颜色混合（原来在场景 5 里定义，重写后必须保留）
+function mixRGB(a, b, k) {
+  return 'rgb(' + Math.round(lerp(a[0], b[0], k)) + ',' + Math.round(lerp(a[1], b[1], k)) + ',' + Math.round(lerp(a[2], b[2], k)) + ')';
+}
+function scene_love(norm, frame) {
+  const L = getL(), C = COL();
+  const u = sceneLocal('LOVE', norm);
+
+  const s1 = seg(u, 0.00, 0.20), s2 = seg(u, 0.20, 0.40), s3 = seg(u, 0.40, 0.60),
+        s4 = seg(u, 0.60, 0.75), s5 = seg(u, 0.75, 0.90), s6 = seg(u, 0.90, 1.00);
+
+  const cx = (L.cx0 + L.cx1) / 2, cy = (L.mainTop + L.mainBot) / 2;
+  const availW = L.cx1 - L.cx0, availH = L.mainBot - L.mainTop;
+
+  // 心跳：相位仍然来自 audio.currentTime（不是独立计时器）
+  const beatPh = 1 - ((AUDIO.time * BEAT_BPM / 60) % 1);
+  const pulseAmt = s4 >= 0 ? 0.085 : (s5 >= 0 ? 0.03 : 0.02);
+  const pulse = 1 + pulseAmt * Math.pow(beatPh, 3);
+  // 子阶段 4 脉动段辉光最高；LOVE 全场比其他场景更亮
+  CONFIG.glowBoost = s4 >= 0 ? 2.2 : (s3 >= 0 ? 1.9 : 1.5);
+  const S = Math.min(availW / 2.5, availH / 1.45) * pulse;
+  const Sy = S * 0.6;
+
+  // 主色 → 暖白（子阶段 3 完成渐变）
+  const warmK = s3 >= 0 ? clamp(s3 / 0.7, 0, 1) : (s2 >= 0 ? s2 * 0.3 : 0);
+  const base = hexToRgb(C.bright), warm = hexToRgb(WARM_WHITE), deep = hexToRgb(C.deep);
+  const dim = s5 >= 0 ? clamp(s5 * 0.9, 0, 0.75) : 0;          // 子阶段 5 起整体变暗
+  const pal = [];
+  for (let i = 0; i < 6; i++) pal.push(mixRGB(mixRGB(base, warm, (i / 5) * warmK), deep, dim));
+  const edgeColor = mixRGB(mixRGB(warm, base, 1 - warmK), deep, dim);
+
+  // —— 子阶段 1：字符从四面八方汇聚成心形轮廓的雏形 ——
+  if (!VIS.m && s1 >= 0) {
+    const k = easeOut(s1);
+    for (let i = 0; i < 260; i++) {
+      const th = hash11(i * 5.9) * Math.PI * 2;
+      const px = 1.14 * Math.pow(Math.sin(th), 3);
+      const py = 1.247 * (13 * Math.cos(th) - 5 * Math.cos(2 * th) - 2 * Math.cos(3 * th) - Math.cos(4 * th)) / 16 + 0.065;
+      const tx = cx + px * S, ty = cy - (py + 0.13) * Sy;
+      const sx = 2 + hash11(i * 1.7) * (L.C - 4), sy = L.mainTop + hash11(i * 3.3) * availH;
+      const d = hash11(i * 11.3) * 0.35;
+      const kk = easeOut(clamp((k - d) / (1 - d || 1), 0, 1));
+      if (kk <= 0) continue;
+      frame.set(Math.round(lerp(sx, tx, kk)), Math.round(lerp(sy, ty, kk)),
+        kk > 0.85 ? '♥' : (kk > 0.5 ? '*' : '+'), kk > 0.85 ? edgeColor : pal[2], kk > 0.85);
+    }
+  }
+
+  // —— 子阶段 2-6：心形实体（隐函数二值化 → 四邻判定轮廓，避免中轴假边）——
+  const fillK = s2 >= 0 ? clamp(s2 / 0.8, 0, 1) : (s1 >= 0 ? 0 : 1);
+  if (!VIS.m && fillK > 0.02) {
+    if (!scene_love._mask) scene_love._mask = new Uint8Array(0);
+    const cols = L.C;
+    if (scene_love._mask.length < cols * L.R) scene_love._mask = new Uint8Array(cols * L.R);
+    const mask = scene_love._mask;
+    const bx0 = Math.max(0, Math.floor(cx - 1.25 * S) - 1);
+    const bx1 = Math.min(cols - 1, Math.ceil(cx + 1.25 * S) + 1);
+    const by0 = Math.max(0, Math.floor(cy - 1.25 * Sy) - 1);
+    const by1 = Math.min(L.R - 1, Math.ceil(cy + 1.25 * Sy) + 1);
+    for (let y = by0; y <= by1; y++) {                          // 二值化
+      const ny = -((y - cy) / Sy) - 0.13;
+      for (let x = bx0; x <= bx1; x++) {
+        const nx = (x - cx) / S;
+        const q = nx * nx + ny * ny - 1;
+        mask[y * cols + x] = (q * q * q - nx * nx * ny * ny * ny <= 0) ? 1 : 0;
+      }
+    }
+    // 子阶段 5：心形解体成两半，向左右漂移
+    const split = s5 >= 0 ? easeInOut(s5) * Math.min(26, availW * 0.18) : 0;
+    if (s6 >= 0) { /* 子阶段 6 只保留代码行，心形先整体淡出 */ }
+    const edgeFlow = s3 >= 0 ? 1 : 0;                           // 边缘流动开关
+    for (let y = Math.max(L.mainTop, by0 + 1); y <= Math.min(L.mainBot, by1 - 1); y++) {
+      const ny = -((y - cy) / Sy) - 0.13;
+      for (let x = Math.max(L.cx0, bx0 + 1); x <= Math.min(L.cx1, bx1 - 1); x++) {
+        const i = y * cols + x;
+        if (!mask[i]) continue;
+        if (hash2(x * 2.3, y * 1.7) > fillK) continue;          // 逐格浮现
+        const nx = (x - cx) / S;
+        const q = nx * nx + ny * ny - 1;
+        const f = q * q * q - nx * nx * ny * ny * ny;
+        const depth = clamp(-f / 1.2, 0, 1);
+        const edge = !mask[i - 1] || !mask[i + 1] || !mask[i - cols] || !mask[i + cols];
+        let ch, col;
+        if (edge) {
+          // 边缘流动：让轮廓上的 ♥ 沿边界缓慢游走
+          const flow = edgeFlow ? hash2(x * 0.7 + Math.floor(FX.t * 3) * 1.7, y * 1.3) : 1;
+          ch = flow > 0.42 ? '♥' : '·';
+          col = flow > 0.42 ? edgeColor : pal[1];
+        } else if (hash2(x * 3.7, y * 2.9) < 0.06) { ch = '.'; col = pal[0]; }
+        else if (depth > 0.55) { ch = '@'; col = pal[5]; }
+        else if (depth > 0.3) { ch = '%'; col = pal[4]; }
+        else if (depth > 0.12) { ch = '#'; col = pal[3]; }
+        else { ch = '*'; col = pal[2]; }
+        const xo = split > 0 ? (x < cx ? -split : split) : 0;   // 子阶段 5 的左右漂移
+        frame.set(Math.round(x + xo), y, ch, col, edge || ch === '@');
+      }
+    }
+  }
+
+  // —— 子阶段 5：中间露出 love := ♥ ——
+  if (!VIS.m && s5 >= 0) {
+    const k = clamp((s5 - 0.15) / 0.45, 0, 1);
+    if (k > 0) {
+      const txt = 'love := ♥';
+      const shown = txt.slice(0, Math.max(1, Math.round(k * txt.length)));
+      frame.centerText(Math.round(cy), shown, mixRGB(warm, deep, 1 - k), k > 0.6);
+    }
+  }
+
+  // —— 子阶段 6：所有字符暗下去，只剩 world.execute(me); 光标闪烁 ——
+  if (s6 >= 0) {
+    const k = clamp(s6 / 0.25, 0, 1);                       // 收尾加速：3 秒内清空
+    for (let y = L.mainTop; y <= L.mainBot; y++) {
+      for (let x = L.cx0; x <= L.cx1; x++) {
+        if (hash2(x * 1.3, y * 2.7) < k) frame.erase(x, y);
+      }
+    }
+    if (s6 > 0.08) {                                          // 代码行尽早出现（约 208.8s）
+      const txt = 'world.execute(me);';
+      const x0 = Math.floor((L.C - txt.length) / 2);
+      frame.text(x0, Math.round(cy), txt, WARM_WHITE, true);
+      if ((FX.t * 1.6) % 1 < 0.6) frame.set(x0 + txt.length, Math.round(cy), '█', WARM_WHITE, true);
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   [12] 左右数据流面板：标签固定为 n -> INF / YOU.LIMIT，内容随场景变化
+   --------------------------------------------------------------------------- */
+function drawSidePanels(frame, sceneName, t, norm, u) {
+  const L = getL(), C = COL();
+  const h = L.mainBot - L.mainTop + 1;
+  const rows = h - 2;
+  const scroll = Math.floor(t * 6);
+  const left = [], right = [];
+  for (let i = 0; i < rows; i++) {
+    const k = scroll + i;
+    switch (sceneName) {
+      case 'CREATION':
+        left.push('0x' + (k * 4).toString(16).toUpperCase().padStart(4, '0') + '  ' +
+          Math.floor(hash11(k * 3.1) * 65535).toString(16).toUpperCase().padStart(4, '0'));
+        right.push(i < 9 ? (i < Math.floor(u * 11) ? 'POST ' + i + ' OK' : 'POST ' + i + ' ..') : '');
+        break;
+      case 'DEVOTION':
+        left.push('n' + String(k % 100).padStart(3, ' ') + ' = ' + (Math.pow(2, Math.min(40, k % 40))).toExponential(2));
+        right.push('YOU.LIMIT ' + (99.9 - (k % 7) * 0.01).toFixed(2) + '%');
+        break;
+      case 'EXECUTION':
+        left.push('0x' + (k * 4096).toString(16).toUpperCase().padStart(8, '0') + '  ' + (hash11(k * 7.7) > 0.5 ? 'RD' : 'WR'));
+        right.push('THR' + String(k % 64).padStart(2, '0') + '  ' + (hash11(k * 2.3) > 0.25 ? 'RUN' : 'BLK'));
+        break;
+      case 'RELEASE':
+        left.push(['ERROR', 'NULL', '0x00', 'SEG_FAULT', 'DUMP'][k % 5] + '  ' + (hash11(k * 5.1) * 255).toFixed(0));
+        right.push('MEM ' + (100 - Math.min(100, Math.floor(u * 130) + (k % 5))) + '%  ' + '░'.repeat(k % 6));
+        break;
+      default: // LOVE
+        left.push('HEART ' + (BEAT_BPM + Math.round(Math.sin(k) * 2)) + ' BPM  ' + (hash11(k * 3.3) > 0.5 ? '♥' : ' '));
+        right.push('love := ' + (u > 0.5 ? '♥' : 'null'));
+        break;
+    }
+  }
+  // RELEASE 场景的面板整体染红、闪烁
+  const panic = sceneName === 'RELEASE';
+  const c1 = panic && (FX.t * 4) % 1 < 0.5 ? C.alert : C.dark;
+  drawPanel(frame, L.panLx, L.mainTop, L.panW, h, 'n -> INF', left, c1, panic ? C.alert : C.mid);
+  drawPanel(frame, L.panRx, L.mainTop, L.panW, h, 'YOU.LIMIT', right, c1, panic ? C.alert : C.mid);
+}
+
+/* ---------------------------------------------------------------------------
+   [13] MV 主渲染：场景选择 + 布局 + 歌词 + 开发者面板 + 合成
+   时间唯一来源 = audio.currentTime（用 performance.now 单独计时是被禁止的）
+   --------------------------------------------------------------------------- */
+const SUBTITLES = {
+  CREATION: 'SELF SYSTEM v1.0 — POWER ON SELF TEST',
+  DEVOTION: 'INFINITE LOOP / n -> INF    GROWTH RATE: EXPONENTIAL',
+  EXECUTION: 'EXECUTING...  NO RETURN PATH',
+  RELEASE: 'CONNECTION LOST — DUMPING MEMORY',
+  LOVE: 'love := ♥  //  FINAL ASSIGNMENT'
+};
+function renderMVStage() {
+  const L = getL(), C = COL(), f = FRAME;
+  const total = (AUDIO.duration && isFinite(AUDIO.duration) && AUDIO.duration > 0) ? AUDIO.duration : 1;
+  const t = mvTime();                       // 问题 4：音频已播秒数 - 起播时刻
+  const norm = clamp(t / total, 0, 1);
+
+  // —— 场景判定（开发者面板可强制锁定）——
+  let sceneName, sceneNorm = norm;
+  const ov = devMode.visible ? devPanel.sceneOverride : 'AUTO';
+  if (ov !== 'AUTO') {
+    sceneName = ov;
+    const s = sceneByName(ov);
+    // 调试模式：场景时间按 0-1 循环，每 20 秒一轮
+    const local = (performance.now() / 20000) % 1;
+    sceneNorm = s.start + local * (s.end - s.start);
+  } else {
+    // 问题 5：场景由歌词边界决定（每帧查一次当前落在哪个区间）
+    const s = getCurrentScene(norm);
+    sceneName = s.name;
+  }
+  const u = sceneLocal(sceneName, sceneNorm);
+  updateLyricVis(t, total);        // 歌词视觉层：当前歌词 + 行内进度
+
+  f.clear();
+  // 外框（机壳内的显示区域）
+  f.box(0, 0, L.C, L.R, C.deep);
+  drawHeader(f, t, total, sceneName);
+
+  // 副标题
+  let sub = SUBTITLES[sceneName] || '';
+  if (ov !== 'AUTO') sub += '            [DEBUG: LOCKED]';
+  f.centerText(L.sub, sub, ov !== 'AUTO' ? C.alert : C.mid);
+  f.centerText(L.sub2, (sceneName === 'LOVE' ? '♥ ' : '· ') + sceneName + ' · ' +
+    Math.round(u * 100) + '%  (' + fmtTime(norm * total) + ')', C.dark);
+
+  // 主内容
+  switch (sceneName) {
+    case 'CREATION': scene_creation(sceneNorm, f); break;
+    case 'DEVOTION': scene_devotion(sceneNorm, f); break;
+    case 'EXECUTION': scene_execution(sceneNorm, f); break;
+    case 'RELEASE': scene_release(sceneNorm, f); break;
+    default: scene_love(sceneNorm, f); break;
+  }
+  // 歌词对应的主体视觉（有匹配时才画；没有则由场景自己的子阶段撑场）
+  if (VIS.m) drawMotif(f, VIS.m, VIS.p);
+
+  drawSidePanels(f, sceneName, t, norm, u);
+
+  // 底部状态栏
+  const stat = sceneName === 'RELEASE' ? 'FAIL'
+    : (sceneName === 'EXECUTION' ? (Math.floor(t * 2) % 4 === 0 ? 'FAIL' : 'OK')
+      : (sceneName === 'CREATION' ? (u > 0.35 ? 'OK' : '--') : 'OK'));
+  let sx = drawProgressBar(f, L.panLx + 2, L.status, 'POWER SUPPLY', stat, 0);
+  drawProgressBar(f, sx + 3, L.status, 'SOUL LINK', sceneName === 'RELEASE' ? '--' : 'OK', 0);
+  f.rightText(L.panRx + L.panW - 2, L.status, 'FRAME ' + String(frameCount).padStart(6, '0') + '  FPS ' + fpsValue.toFixed(1), C.dark);
+  // 场景注释行
+  if (sceneName === 'DEVOTION') f.text(L.panLx + 2, L.note, 'n = 2^0008   /   NO UPPER BOUND', C.mid);
+  else if (sceneName === 'EXECUTION') f.text(L.panLx + 2, L.note, '> execute(me)   [Y/n]', C.mid);
+  else if (sceneName === 'RELEASE') f.text(L.panLx + 2, L.note, 'DUMPING 0x7FFE0000 ... ' + Math.round(u * 100) + '%  [FAIL]', C.alert);
+  else if (sceneName === 'LOVE') f.text(L.panLx + 2, L.note, 'love := ♥   //   FINAL ASSIGNMENT COMMITTED', C.mid);
+  else f.text(L.panLx + 2, L.note, 'IDENTITY : [YOU_   ...   OK', C.mid);
+
+  drawLyrics(f, t, total);
+
+  // 底部提示
+  if (AUDIO.blocked) f.centerText(L.hint, '> AUDIO BLOCKED — CLICK ANYWHERE TO SYNC', C.alert);
+  else drawHints(f, '[D] DEV MODE   [SPACE] PAUSE   [←/→] SEEK 10s', fmtTime(total) + '  ' + C_BRAND);
+
+  if (devMode.visible) devPanel.render(f);
+
+  // 后处理：LOVE 终章辉光拉满
+  if (sceneName !== 'LOVE') CONFIG.glowBoost = 1.0;   // LOVE 的辉光由场景内部按子阶段写
+  GlowEngine.process(f);
+  drawOffCanvas(f);
+  compositeToMain();
+}
+const C_BRAND = 'MILI // WORLD.EXECUTE(ME);';
+
+/* ---------------------------------------------------------------------------
+   [14] StyleSelector —— 风格选择界面
+   整个界面本身就是字符网格，切换风格时立即用新风格重绘。
+   预览窗口跑一个独立的 4 秒循环动画（自带独立 rAF 时钟）。
+   --------------------------------------------------------------------------- */
+let previewRAF = 0;
+function previewLoop() {
+  if (STAGE !== 'STYLE') { previewRAF = 0; return; }   // 离开该阶段就自然停表，不泄漏
+  previewRAF = requestAnimationFrame(previewLoop);
+}
+function saveStyle() { try { localStorage.setItem(STYLE_KEY, STYLE.current); } catch (e) { /* 隐私模式忽略 */ } }
+
+class StyleSelector {
+  constructor() {
+    this.index = 0;
+    this.hover = -1;
+    this.itemRows = [];
+    this.itemX0 = 0;
+    this.itemX1 = 0;
+  }
+  init() {
+    let saved = null;
+    try { saved = localStorage.getItem(STYLE_KEY); } catch (e) { saved = null; }
+    const i = STYLE_PRESETS.findIndex(p => p.id === saved);
+    this.index = i >= 0 ? i : 0;                       // 无效值回落第一个预设
+    STYLE.apply(STYLE_PRESETS[this.index].id);
+  }
+  current() { return STYLE_PRESETS[this.index]; }
+  move(d) {
+    this.index = (this.index + d + STYLE_PRESETS.length) % STYLE_PRESETS.length;
+    this.applyCurrent();
+  }
+  applyCurrent() {
+    STYLE.apply(this.current().id);
+    saveStyle();
+    FX.flash = Math.max(FX.flash, 0.16);              // 切风格时轻微闪一下，强化"换管"手感
+  }
+  handleKey(e) {
+    const k = e.key;
+    if (k === 'ArrowUp' || k === 'w' || k === 'W') { this.move(-1); e.preventDefault(); }
+    else if (k === 'ArrowDown' || k === 's' || k === 'S') { this.move(1); e.preventDefault(); }
+    else if (k === 'Enter' || k === ' ') { this.confirm(); e.preventDefault(); }
+    else if (k >= '1' && k <= '6') { this.index = Number(k) - 1; this.applyCurrent(); }
+  }
+  confirm() {
+    saveStyle();
+    confirmStyleSelection();
+  }
+  render(frame) {
+    const L = getL(), C = COL();
+    frame.box(0, 0, L.C, L.R, C.mid);
+    frame.text(3, L.hdr, 'WORLD.EXECUTE(ME);', C.pure, true);
+    frame.rightText(L.C - 4, L.hdr, 'SELF SYSTEM v1.0  //  TERMINAL READY', C.dark);
+    frame.centerText(2, '┤ SELECT VISUAL STYLE ├', C.bright, true);
+    frame.centerText(4, '─ '.repeat(1) + 'CHOOSE HOW THE WORLD LOOKS WHEN I EXECUTE MYSELF' + ' ─'.repeat(1), C.dark);
+
+    // 风格列表
+    const rows = [];
+    for (let i = 0; i < STYLE_PRESETS.length; i++) {
+      const p = STYLE_PRESETS[i];
+      const y = 10 + i * 2;
+      rows.push(y);
+      const sel = (i === this.index), hov = (i === this.hover);
+      frame.text(38, y, sel ? '>' : ' ', C.pure);
+      frame.text(41, y, ('0' + (i + 1)).slice(-2), sel ? C.light : C.deep);
+      const nameEnd = frame.text(45, y, p.name, sel ? C.pure : (hov ? C.bright : C.mid), sel);
+      // 引导点：从英文名一直连到中文名，像终端里的目录树条目
+      for (let x = nameEnd + 1; x < 80; x++) frame.set(x, y, '·', sel ? C.deep : C.glowFar);
+      frame.rightText(90, y, p.nameCN, sel ? C.bright : C.dark);
+      if (sel) frame.text(93, y, '◄ ACTIVE', C.light);
+    }
+    this.itemRows = rows; this.itemX0 = 34; this.itemX1 = 106;
+
+    // 预览窗口
+    const px = 52, py = 24, pw = 96, ph = 22;
+    frame.box(px, py, pw, ph, C.mid, 'PREVIEW', C.bright);
+    this.preview(frame, px + 2, py + 2, pw - 4, ph - 4);
+
+    // 描述
+    const p = this.current();
+    frame.centerText(py + ph + 3, p.description, C.mid);
+    frame.centerText(py + ph + 5, p.descriptionCN, C.light);
+
+    // 操作提示
+    frame.centerText(L.R - 6, '[↑↓] NAVIGATE    [ENTER] CONFIRM    [1-6] QUICK PICK' +
+      (ENABLE_DEV_MODE ? '    [D] DEV MODE' : ''), C.bright);
+    frame.centerText(L.R - 4, 'THE STYLE IS SAVED TO LOCALSTORAGE  //  KEY: ' + STYLE_KEY, C.deep);
+
+    // 背景数据雨（只填下半屏，营造"终端待机"的呼吸感）
+    for (let x = 2; x < L.C - 2; x++) {
+      const sp = 0.3 + hash11(x * 4.1) * 1.4;
+      const head = L.R - 2 - ((FX.t * 9 * sp + hash11(x * 9.7) * 40) % (L.R * 0.55));
+      for (let j = 0; j < 6; j++) {
+        const y = Math.floor(head) - j;
+        if (y < py + ph + 8 || y > L.R - 8) continue;
+        if (hash2(x * 2.1, y * 1.7) < 0.55) continue;
+        frame.set(x, y, DENSITY[1 + Math.floor(hash2(x, y + Math.floor(FX.t)) * 3)], j === 0 ? C.dark : C.deep);
+      }
+    }
+  }
+  /* 4 秒循环预览：0-1s 打字机 / 1-2s EXECUTING / 2-3s 进度条 / 3-4s 故障闪烁 */
+  preview(frame, x, y, w, h) {
+    const C = COL();
+    const p = ((performance.now() - stageStart) / 4000) % 1;
+    const midY = y + Math.floor(h / 2);
+    const txt = 'world.execute(me);';
+    if (p < 0.25) {
+      const k = p / 0.25;
+      const shown = Math.floor(k * (txt.length + 2));
+      frame.text(x + 4, midY - 2, txt.slice(0, Math.min(shown, txt.length)), C.pure, true);
+      if ((FX.t * 3) % 1 < 0.6) frame.set(x + 4 + Math.min(shown, txt.length), midY - 2, '█', C.pure, true);
+    } else if (p < 0.5) {
+      frame.text(x + 4, midY - 2, txt, C.light);
+      frame.text(x + 4, midY, '> EXECUTING...', C.bright, true);
+      if ((FX.t * 2.4) % 1 < 0.6) frame.set(x + 4 + 15, midY, '█', C.pure, true);
+    } else if (p < 0.75) {
+      const k = (p - 0.5) / 0.25;
+      frame.text(x + 4, midY - 2, txt, C.light);
+      frame.text(x + 4, midY, '> EXECUTING...', C.bright);
+      const cells = Math.max(10, w - 30), on = Math.round(k * cells);
+      frame.text(x + 4, midY + 2, '[' + '█'.repeat(on) + '░'.repeat(cells - on) + '] ' +
+        String(Math.round(k * 100)).padStart(3, ' ') + '%', C.mid);
+    } else {
+      // 故障：整块区域随机字符 + 色偏抖动
+      const k = (p - 0.75) / 0.25;
+      for (let j = 0; j < h; j++) {
+        for (let i = 0; i < w; i++) {
+          if (hash2(i * 1.3 + Math.floor(FX.t * 24), j * 2.7) > 0.35 + k * 0.4) continue;
+          frame.set(x + i, y + j, DENSITY[Math.floor(hash2(i, j + Math.floor(FX.t * 30)) * DENSITY.length)],
+            hash2(i * 3.1, j) > 0.85 ? C.alert : C.mid, true);
+        }
+      }
+      frame.centerText(midY, 'SIGNAL LOST', C.alert, true);
+    }
+  }
+  // 鼠标：悬停高亮 + 点击选中（点已选中项 = 确认）
+  pointer(mx, my, click) {
+    if (my < 0 || mx < 0) return false;
+    let hit = -1;
+    for (let i = 0; i < this.itemRows.length; i++) if (this.itemRows[i] === my) hit = i;
+    if (hit >= 0 && mx >= this.itemX0 && mx <= this.itemX1) {
+      this.hover = hit;
+      if (click) {
+        if (hit === this.index) this.confirm();
+        else { this.index = hit; this.applyCurrent(); }
+      }
+      return true;
+    }
+    this.hover = -1;
+    return false;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   [15] 阶段过渡：字符向中心收缩 → 一行 INITIALIZING DIALOGUE... → 淡出
+   --------------------------------------------------------------------------- */
+const TRANS = { active: false, t0: 0, chars: [], dur: 1.9, to: 'LOADING' };
+function startTransition(to) {
+  const f = FRAME, arr = [];
+  for (let yy = 0; yy < f.rows; yy++) {
+    const row = yy * f.cols;
+    for (let xx = 0; xx < f.cols; xx++) {
+      const c = f.ch[row + xx];
+      if (c === ' ' || c === '\u0000') continue;
+      arr.push(xx, yy, c, f.co[row + xx]);
+    }
+  }
+  TRANS.chars = arr;
+  TRANS.active = true;
+  TRANS.t0 = performance.now();
+  TRANS.to = to;
+  STAGE = 'TRANSITION';
+  FX.flash = Math.max(FX.flash, 0.5);
+  triggerGlitch(0.2);
+}
+function confirmStyleSelection() { startTransition('LOADING'); }
+
+function renderTransition() {
+  const L = getL(), C = COL(), f = FRAME;
+  const p = clamp((performance.now() - TRANS.t0) / (TRANS.dur * 1000), 0, 1);
+  f.clear();
+  f.box(0, 0, L.C, L.R, C.deep);
+  const cx = L.C / 2, cy = L.R / 2;
+  const k = easeInOut(clamp(p / 0.6, 0, 1));
+  const arr = TRANS.chars;
+  for (let i = 0; i < arr.length; i += 4) {
+    if (hash11(i * 0.37) < k * 0.6) continue;                 // 越收缩丢得越多
+    const nx = Math.round(lerp(arr[i], cx, k));
+    const ny = Math.round(lerp(arr[i + 1], cy, k));
+    f.set(nx, ny, arr[i + 2], arr[i + 3]);
+  }
+  if (p > 0.6) {
+    const txt = '> INITIALIZING DIALOGUE...';
+    const shown = Math.floor(clamp((p - 0.6) / 0.32, 0, 1) * txt.length);
+    const x0 = Math.floor((L.C - txt.length) / 2);
+    f.text(x0, Math.round(cy), txt.slice(0, shown), C.pure, true);
+    if ((FX.t * 2.4) % 1 < 0.6) f.set(x0 + shown, Math.round(cy), '█', C.pure, true);
+  }
+  FX.fade = clamp((p - 0.7) / 0.3, 0, 1);
+  GlowEngine.process(f);
+  drawOffCanvas(f);
+  compositeToMain();
+  if (p >= 1) { TRANS.active = false; enterStage(TRANS.to); }
+}
+
+/* ---------------------------------------------------------------------------
+   [16] 音频管理
+   规格要求音频为同目录 music.mp3；为兼容"手上只有 flac"的情况，
+   这里做一个候选源回退链：music.mp3 → music.flac → music.ogg → music.wav → music.m4a。
+   （整条链都不存在时才会进入 ERROR 画面。）
+   所有对 audio 元素的方法调用都做了 typeof 保护，避免在残缺环境里抛错。
+   --------------------------------------------------------------------------- */
+const audioEl = document.getElementById('music');
+const AUDIO_CANDIDATES = ['music.mp3', 'music.flac', 'music.ogg', 'music.wav', 'music.m4a'];
+const AUDIO = { el: audioEl, duration: 0, time: 0, paused: true, ok: false, failed: false, blocked: false, idx: 0 };
+// 问题 4：MV 起播基准。-1 表示还没取到（起播后第一帧用真实 currentTime 校正）
+let audioStartTime = -1;
+function mvTime() { return audioStartTime < 0 ? 0 : Math.max(0, (AUDIO.time || 0) - audioStartTime); }
+
+function safePlay() {
+  try {
+    if (typeof audioEl.play !== 'function') return;
+    const p = audioEl.play();
+    if (p && typeof p.catch === 'function') p.catch(function () { AUDIO.blocked = true; });
+  } catch (e) { AUDIO.blocked = true; }
+}
+function safePause() { try { if (typeof audioEl.pause === 'function') audioEl.pause(); } catch (e) { /* 忽略 */ } }
+
+// 时长就绪 → 把 LRC 的绝对秒数换算成"占全曲的百分比"，并算出终章淡出的归一化起点
+// 时长就绪 → 按选定歌词源构建全局百分比时间轴（问题 3：歌词不再是场景内时间）
+function buildLyrics(d) {
+  if (LYRICS_SOURCE === 'USER') {
+    // 表里的 t 本来就是"占总时长百分比"，直接用；空行（结束标记）过滤掉
+    CONFIG.lyrics = LYRICS_USER
+      .filter(function (it) { return it.en; })
+      .map(function (it) { return { t: clamp(it.t, 0, 0.9995), sec: it.t * d, en: it.en, cn: it.cn }; });
+  } else {
+    // 随附 .lrc 的原始时间戳（秒）÷ 实际时长
+    CONFIG.lyrics = LRC.map(function (it) {
+      return { t: clamp(it[0] / d, 0, 0.9995), sec: it[0], en: it[1], cn: it[2] };
+    });
+  }
+  rebuildSceneKeys(d);   // 歌词源定了，场景边界跟着一起重建（两边必须同源）
+  // 歌词视觉层：按行预先匹配好视觉描述，运行期零正则
+  MOTIF_BY_INDEX = CONFIG.lyrics.map(function (l) { return motifFor(l); });
+  // 桥句（"Then I will give you my" 这类本身没有图形）直接继承下一句的视觉，
+  // 这样画面是提前成形，而不是退回通用场景动画
+  for (let i = MOTIF_BY_INDEX.length - 2; i >= 0; i--) {
+    if (!MOTIF_BY_INDEX[i]) MOTIF_BY_INDEX[i] = MOTIF_BY_INDEX[i + 1];
+  }
+  // 叙事拐点：官方歌词里 "Though you have left" 之后情绪急转直下，
+  // 之后的画面要明显比前半段更破、更乱（见 scene_execution 的 grief）
+  GRIEF_IDX = -1;
+  for (let i = 0; i < CONFIG.lyrics.length; i++) {
+    if (/you have left/i.test(CONFIG.lyrics[i].en)) { GRIEF_IDX = i; break; }
+  }
+}
+
+function loadSource(i) {
+  AUDIO.idx = i;
+  if (i >= AUDIO_CANDIDATES.length) { AUDIO.failed = true; if (STAGE !== 'ERROR') enterStage('ERROR'); return; }
+  try {
+    audioEl.src = AUDIO_CANDIDATES[i];
+    if (typeof audioEl.load === 'function') audioEl.load();
+  } catch (e) { /* 忽略，交给 error 事件继续回退 */ }
+}
+function syncAudioState() {
+  const el = AUDIO.el;
+  const ct = el.currentTime;
+  AUDIO.time = (typeof ct === 'number' && isFinite(ct) && ct > 0) ? ct : 0;
+  const d = el.duration;
+  if (typeof d === 'number' && isFinite(d) && d > 0) {
+    if (!AUDIO.ok || Math.abs(d - AUDIO.duration) > 0.05) { AUDIO.duration = d; buildLyrics(d); }
+    AUDIO.ok = true;
+  }
+  AUDIO.paused = !!el.paused;
+}
+// 已缓冲比例：优先用 buffered 区间，退化为 readyState
+function bufferedRatio() {
+  const el = AUDIO.el, d = AUDIO.duration;
+  if (!AUDIO.ok || !isFinite(d) || d <= 0) return -1;
+  try {
+    const b = el.buffered;
+    if (b && b.length) {
+      let end = 0;
+      for (let i = 0; i < b.length; i++) end = Math.max(end, b.end(i));
+      if (end > 0) return clamp(end / d, 0, 1);
+    }
+  } catch (e) { /* 某些源不允许读 buffered */ }
+  return ((el.readyState | 0) >= 4) ? 1 : 0;
+}
+// 首次用户手势里解锁音频（绕过自动播放限制），之后进入 MV 就能直接 play()
+let audioUnlocked = false;
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  const el = AUDIO.el;
+  try {
+    el.muted = true;
+    if (typeof el.play !== 'function') { el.muted = false; return; }
+    const p = el.play();
+    const restore = function () { try { el.muted = false; } catch (e) { /* 忽略 */ } };
+    if (p && typeof p.then === 'function') {
+      p.then(function () { try { if (typeof el.pause === 'function') el.pause(); el.currentTime = 0; } catch (e) { /* 忽略 */ } restore(); })
+        .catch(restore);
+    } else restore();
+  } catch (e) { try { el.muted = false; } catch (e2) { /* 忽略 */ } }
+}
+
+/* ---------------------------------------------------------------------------
+   [17] LOADING 阶段 —— "自我同步"（实际在等音频缓冲完成，但不明说）
+   进度条永远不会明说在下载音乐：显示的是 SOUL.SYS / MEMORY CORE / NEURAL LINK
+   三条子系统的装配进度，真实数据来自音频已缓冲比例。
+   --------------------------------------------------------------------------- */
+const LOAD = { t0: 0, shown: 0, done: false, doneT: 0, forced: false };
+const LOAD_SUBS = [
+  { label: 'SOUL.SYS', a: 0.00, b: 1.00 },
+  { label: 'MEMORY CORE', a: -0.25, b: 1.50 },
+  { label: 'NEURAL LINK', a: -0.45, b: 1.20 },
+  { label: 'EMOTION MATRIX', a: -0.70, b: 1.35 }
+];
+function renderLoadingStage(dt) {
+  const L = getL(), C = COL(), f = FRAME;
+  const now = performance.now();
+  const el = now - LOAD.t0;
+  const real = bufferedRatio();
+  // 视觉进度：单调递增 + 缓慢"涓流"，最多领先真实进度 15%，避免卡住不动
+  if (real >= 0) LOAD.shown = Math.max(LOAD.shown, real);
+  const trickle = Math.min(0.97, (real >= 0 ? real : 0) + 0.15);
+  if (LOAD.shown < trickle) LOAD.shown = Math.min(trickle, LOAD.shown + dt * 0.06);
+  const p = LOAD.shown;
+
+  if (!LOAD.done && real >= 0.995 && el > 1800) { LOAD.done = true; LOAD.doneT = now; }
+  // 兜底：等太久（7 秒）就允许强行进入下一阶段，免得某些浏览器读不到 buffered 卡死在这里
+  if (!LOAD.done && (el > 7000 || LOAD.forced)) { LOAD.done = true; LOAD.doneT = now; }
+  if (LOAD.done && now - LOAD.doneT > 900) { enterStage('DIALOG'); return; }
+
+  f.clear();
+  f.box(0, 0, L.C, L.R, C.mid);
+  f.text(3, L.hdr, 'WORLD.EXECUTE(ME);', C.pure, true);
+  f.rightText(L.C - 4, L.hdr, LOAD.done ? 'SYNC COMPLETE' : 'SYNCING...', LOAD.done ? C.bright : C.dark);
+  f.centerText(2, '┤ SELF SYSTEM v1.0 ├', C.bright, true);
+
+  drawBig(f, LOAD.done ? 'SYNCED' : 'SELF SYNC', L.C / 2, 11, 1, 1, LOAD.done ? C.pure : C.bright, true);
+
+  // 子系统装配进度
+  const bx = 52, bw = 96;
+  f.box(bx, 17, bw, LOAD_SUBS.length + 3, C.mid, 'SUBSYSTEM ASSEMBLY', C.light);
+  for (let i = 0; i < LOAD_SUBS.length; i++) {
+    const s = LOAD_SUBS[i];
+    const v = clamp(p * s.b + s.a, 0, 1);
+    const cells = 14, on = Math.round(v * cells);
+    const y = 19 + i;
+    f.text(bx + 3, y, s.label.padEnd(16, ' '), v >= 1 ? C.light : C.mid);
+    f.text(bx + 21, y, '[' + '█'.repeat(on) + '░'.repeat(cells - on) + ']', v >= 1 ? C.bright : C.light, v >= 1);
+    f.rightText(bx + bw - 3, y, String(Math.round(v * 100)).padStart(3, ' ') + '%', v >= 1 ? C.bright : C.mid);
+  }
+  // 总线总进度
+  const y0 = 19 + LOAD_SUBS.length + 1;
+  const total = 40, on2 = Math.round(p * total);
+  f.centerText(y0, '[' + '█'.repeat(on2) + '░'.repeat(total - on2) + ']  ' + String(Math.round(p * 100)).padStart(3, ' ') + '%', LOAD.done ? C.pure : C.bright, true);
+
+  // 相位文案（依旧不提"音频"）
+  const phase = LOAD.done ? 'SYNC COMPLETE — WAKING SELF'
+    : (p < 0.30 ? 'RESTORING CONSCIOUSNESS FRAGMENTS'
+      : (p < 0.60 ? 'RE-LINKING MEMORY BUS'
+        : (p < 0.90 ? 'CALIBRATING EMOTION MATRIX' : 'FINALIZING HEARTBEAT PATTERN')));
+  f.centerText(y0 + 3, phase + (LOAD.done ? '' : ' ...'), C.light);
+
+  // 恢复日志（滚动）
+  const logTop = y0 + 6;
+  const lines = Math.max(3, L.mainBot - logTop);
+  const base = Math.floor(el / 260);
+  for (let i = 0; i < lines; i++) {
+    const k = base + i;
+    const ok = hash11(k * 4.7) < p;
+    const addr = '0x' + (k * 256).toString(16).toUpperCase().padStart(5, '0');
+    f.text(L.cx0, logTop + i, addr + (ok ? '  RESTORED  ' : '  PENDING   ') +
+      '[' + (ok ? 'OK' : '..') + ']  ' + (ok ? 'BLOCK ' + k + ' VERIFIED' : 'WAITING FOR SIGNAL'),
+      ok ? C.dark : C.deep);
+  }
+  // 强制同步提示
+  if (!LOAD.done && el > 7000) f.centerText(L.hint, '[ENTER] FORCE SYNC', C.alert);
+  else f.centerText(L.hint, 'DO NOT CLOSE THE TERMINAL', C.deep);
+  present(f);
+}
+
+/* ---------------------------------------------------------------------------
+   [18] DIALOG 阶段 —— AI 女友对话
+   --------------------------------------------------------------------------- */
+const BOOT_LINES = ['SELF SYSTEM v1.0 — INITIALIZING...', '...', 'AWAITING USER INPUT'];
+const GREET_REPLY = [
+  '> HELLO.',
+  "> I'VE BEEN WAITING FOR YOU.",
+  '> LET ME SHOW YOU SOMETHING.',
+  '> world.execute(me);'
+];
+const FAIL_REPLY = ['> I DON\'T UNDERSTAND. TRY SAYING "HELLO".'];
+const DLG = {
+  t0: 0, phase: 'boot', lineIdx: 0, lineT: 0, typed: 0, extra: null, extraT: 0, replyT: 0, goT: 0, isFail: false
+};
+function dlgReset(type) {
+  DLG.phase = 'reply';
+  DLG.isFail = (type !== 'ok');
+  DLG.extra = (type === 'ok' ? GREET_REPLY : FAIL_REPLY).slice();
+  DLG.extraT = performance.now();
+  DLG.lineIdx = 0; DLG.typed = 0;
+  showInputBox(false);
+}
+function dlgSubmit() {
+  const v = String(inputEl.value || '');
+  inputEl.value = '';
+  // 命中问候语才算唤醒（\b 防止把 this / high 里的 hi 也算进去）
+  if (/(\bhello\b|\bhi\b|\bhey\b|你好)/i.test(v)) {
+    unlockAudio();
+    dlgReset('ok');
+  } else {
+    dlgReset('fail');
+  }
+}
+function renderDialogStage() {
+  const L = getL(), C = COL(), f = FRAME;
+  const now = performance.now();
+  f.clear();
+  f.box(0, 0, L.C, L.R, C.deep);
+  f.text(3, L.hdr, 'WORLD.EXECUTE(ME);', C.pure, true);
+  f.rightText(L.C - 4, L.hdr, 'DIALOGUE MODE', C.dark);
+
+  const bx = 20, by = 12, bw = L.C - 40, bh = 48;
+  f.box(bx, by, bw, bh, C.mid, 'SELF SYSTEM v1.0', C.bright);
+  const x0 = bx + 6;
+
+  // 逐字打字机：每行 22 字/秒，行间停 0.35s
+  let y = by + 8;
+  let allDone = true;
+  for (let i = 0; i < BOOT_LINES.length; i++) {
+    const ln = BOOT_LINES[i];
+    const typeTime = ln.length / 22;
+    const startAt = DLG.t0 + i * 700 + 400;
+    const elapsed = (now - startAt) / 1000;
+    if (elapsed <= 0) { allDone = false; break; }
+    const shown = Math.min(ln.length, Math.floor(elapsed * 22));
+    f.text(x0, y, ln.slice(0, shown), i === BOOT_LINES.length - 1 ? C.bright : C.light, i === BOOT_LINES.length - 1);
+    if (shown < ln.length) {
+      if ((FX.t * 3) % 1 < 0.6) f.set(x0 + strW(ln.slice(0, shown)), y, '█', C.pure, true);
+      allDone = false;
+    }
+    y += 2;
+    if (elapsed < typeTime) allDone = false;
+  }
+  if (allDone && DLG.phase === 'boot') {
+    DLG.phase = 'input';
+    showInputBox(true);
     inputEl.focus();
   }
-}
 
-function stopGeneration(){
-  if(abortController){
-    try{ abortController.abort(); }catch(e){}
+  // 对话区
+  const dy = by + 20;
+  if (DLG.phase === 'input') {
+    f.text(bx + 6, dy - 3, '> SAY HELLO TO WAKE ME UP', C.bright, true);
+    // '>' 必须与 HTML 输入框同一行（INPUT_GRID.y），否则光标会浮在提示语下面两行
+    f.text(INPUT_GRID.x - 2, INPUT_GRID.y, '>', C.pure);
   }
-}
-
-async function regenerateFrom(idx){
-  if(generating) return;
-  const conv = getCurrent();
-  if(!conv) return;
-  conv.messages = conv.messages.slice(0, idx);
-  saveState();
-  renderMessages();
-  await generate();
-}
-
-/* ============================================================
- *  事件绑定
- * ============================================================ */
-function autoResize(){
-  inputEl.style.height = 'auto';
-  inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + 'px';
-}
-
-/* ---- 消息区事件委托 ---- */
-messagesEl.addEventListener('click', async (e) => {
-  // 快捷提示词
-  const chip = e.target.closest('.chip');
-  if(chip){
-    inputEl.value = chip.dataset.prompt || '';
-    autoResize();
-    sendMessage();
-    return;
-  }
-
-  const btn = e.target.closest('button[data-act]');
-  if(!btn) return;
-  const act = btn.dataset.act;
-  const key = btn.dataset.key || '';
-
-  /* ---- 消息级操作 ---- */
-  if(act === 'copy-msg'){
-    const msgEl = btn.closest('.msg');
-    const idx = parseInt(msgEl.dataset.idx, 10);
-    const conv = getCurrent();
-    const m = conv && conv.messages[idx];
-    if(m){
-      const ok = await copyText(m.content);
-      toast(ok ? '已复制' : '复制失败');
+  if (DLG.extra) {
+    const per = 900;                       // 每行 0.9s
+    for (let i = 0; i < DLG.extra.length; i++) {
+      const ln = DLG.extra[i];
+      const elapsed = (now - DLG.extraT - i * per) / 1000;
+      if (elapsed <= 0) break;
+      const shown = Math.min(ln.length, Math.floor(elapsed * 18));
+      const yy = dy + i * 2;
+      f.text(x0 - 2, yy, ln.slice(0, shown), i >= 3 ? C.pure : C.bright, i >= 3);
+      if (shown < ln.length && (FX.t * 3) % 1 < 0.6) f.set(x0 - 2 + strW(ln.slice(0, shown)), yy, '█', C.pure, true);
+      if (i === DLG.extra.length - 1 && shown >= ln.length) {
+        // 最后一行打完后停 1.5 秒 → 白闪 → MV
+        if (!DLG.goT) { DLG.goT = now; triggerFlash(0.55); }
+        else if (now - DLG.goT > 1500) { DLG.goT = 0; startMV(); }
+      }
     }
-    return;
-  }
-
-  if(act === 'regen'){
-    const msgEl = btn.closest('.msg');
-    const idx = parseInt(msgEl.dataset.idx, 10);
-    regenerateFrom(idx);
-    return;
-  }
-
-  /* ---- 文件卡片操作 ---- */
-  const card = btn.closest('.file-card');
-  if(!card) return;
-  const codeEl = card.querySelector('pre code');
-  const code = codeEl ? codeEl.textContent : '';
-  const nameEl = card.querySelector('.file-name');
-  const filename = nameEl ? nameEl.textContent : 'code.txt';
-
-  if(act === 'copy'){
-    const ok = await copyText(code);
-    toast(ok ? '代码已复制' : '复制失败');
-    return;
-  }
-
-  if(act === 'download'){
-    downloadText(code, filename);
-    toast('已开始下载 ' + filename);
-    return;
-  }
-
-  if(act === 'toggle'){
-    const body = card.querySelector('.file-body');
-    const nowExpanded = body.classList.toggle('expanded');
-    if(nowExpanded) expandedCards.add(key);
-    else expandedCards.delete(key);
-    btn.textContent = nowExpanded ? '收起 ▲' : '展开全部 ▼';
-    return;
-  }
-
-  if(act === 'preview'){
-    const existing = card.querySelector('.file-preview');
-    if(existing){
-      existing.remove();
-      previewCards.delete(key);
-      btn.textContent = '预览';
-    }else{
-      const wrap = document.createElement('div');
-      wrap.className = 'file-preview';
-      const iframe = document.createElement('iframe');
-      iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-modals allow-popups');
-      iframe.srcdoc = code;
-      wrap.appendChild(iframe);
-      card.appendChild(wrap);
-      previewCards.add(key);
-      btn.textContent = '关闭预览';
+    // 没听懂时：回应播完必须把输入框还给用户，否则流程在这里就死了
+    if (DLG.isFail && now - DLG.extraT > (FAIL_REPLY[0].length / 18) * 1000 + 800) {
+      DLG.extra = null;
+      DLG.isFail = false;
+      DLG.phase = 'input';
+      showInputBox(true);
+      inputEl.focus();
     }
-    return;
   }
-});
+  // 左下角始终显示的心跳指示
+  const beat = (FX.t * BEAT_BPM / 60) % 1;
+  f.text(bx + 2, by + bh - 2, beat < 0.12 ? '♥' : '·', beat < 0.12 ? C.bright : C.deep, beat < 0.12);
+  f.rightText(bx + bw - 3, by + bh - 2, DLG.phase === 'input' ? 'LISTENING' : 'TRANSMITTING', DLG.phase === 'input' ? C.light : C.mid);
+  drawHints(f, '[ENTER] SEND   // 输入 你好 / hello / hi / hey 唤醒她', 'SELF SYSTEM v1.0');
+  present(f);
+}
 
-/* ---- 输入框 ---- */
-inputEl.addEventListener('input', autoResize);
-
-inputEl.addEventListener('keydown', (e) => {
-  if(e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229){
-    e.preventDefault();
-    sendMessage();
+/* ---------------------------------------------------------------------------
+   [19] DevPanel —— 开发者面板（同样用字符网格绘制，不用任何 HTML 表单）
+   --------------------------------------------------------------------------- */
+const devMode = { visible: false, selectedIndex: 0 };
+class DevPanel {
+  constructor() {
+    this.sceneOverride = 'AUTO';
+    this.copyMsg = 0;
+    this.tweaks = { glowStrength: 1, scanlineAlpha: 0.15, vignetteAlpha: 0.6, glitchInterval: 6 };
+    this.buildItems();
+    this.syncTweaks();
   }
-});
-
-sendBtn.addEventListener('click', sendMessage);
-stopBtn.addEventListener('click', stopGeneration);
-
-/* ---- 侧边栏 ---- */
-el('newChatBtn').addEventListener('click', () => {
-  if(generating) stopGeneration();
-  createConversation(true);
-  closeSidebarMobile();
-});
-
-el('menuBtn').addEventListener('click', () => {
-  if(window.innerWidth <= 820){
-    sidebarEl.classList.toggle('open');
-    sidebarMask.classList.toggle('show', sidebarEl.classList.contains('open'));
-  }else{
-    sidebarEl.classList.toggle('collapsed');
+  buildItems() {
+    const self = this;
+    this.items = [
+      {
+        key: 'STYLE', type: 'enum', values: STYLE_PRESETS.map(function (p) { return p.id; }),
+        get: function () { return STYLE.current; },
+        set: function (v) { STYLE.apply(v); self.syncTweaks(); }        // 切风格 = 载入该预设的全部参数
+      },
+      {
+        key: 'GLOW STRENGTH', type: 'float', min: 0, max: 3,
+        get: function () { return self.tweaks.glowStrength; },
+        set: function (v) { v = clamp(v, 0, 3); self.tweaks.glowStrength = v; STYLE.effects.glowStrength = v; CONFIG.glowStrength = v; }
+      },
+      {
+        key: 'SCANLINE ALPHA', type: 'float', min: 0, max: 0.5,
+        get: function () { return self.tweaks.scanlineAlpha; },
+        set: function (v) { v = clamp(v, 0, 0.5); self.tweaks.scanlineAlpha = v; STYLE.effects.scanlineAlpha = v; CONFIG.scanlineAlpha = v; scanDirty = true; }
+      },
+      {
+        key: 'VIGNETTE ALPHA', type: 'float', min: 0, max: 1,
+        get: function () { return self.tweaks.vignetteAlpha; },
+        set: function (v) { v = clamp(v, 0, 1); self.tweaks.vignetteAlpha = v; STYLE.effects.vignetteAlpha = v; CONFIG.vignetteAlpha = v; vignetteDirty = true; }
+      },
+      {
+        key: 'GLITCH INTERVAL', type: 'float', min: 0.5, max: 20,
+        get: function () { return self.tweaks.glitchInterval; },
+        set: function (v) { v = clamp(v, 0.5, 20); self.tweaks.glitchInterval = v; STYLE.effects.glitchInterval = v; CONFIG.glitchInterval = v; }
+      },
+      {
+        key: 'GRID COLS', type: 'int', min: 100, max: 300,
+        get: function () { return CONFIG.gridCols; },
+        set: function (v) { CONFIG.gridCols = clamp(Math.round(v), 100, 300); initGrid(); layoutInputBox(); }
+      },
+      {
+        key: 'GRID ROWS', type: 'int', min: 36, max: 120,
+        get: function () { return CONFIG.gridRows; },
+        set: function (v) { CONFIG.gridRows = clamp(Math.round(v), 36, 120); initGrid(); layoutInputBox(); }
+      },
+      {
+        key: 'FPS TARGET', type: 'int', min: 30, max: 120,
+        get: function () { return CONFIG.fpsTarget; },
+        set: function (v) { CONFIG.fpsTarget = clamp(Math.round(v), 30, 120); }
+      },
+      {
+        key: 'SCENE OVERRIDE', type: 'enum', values: ['AUTO'].concat(SCENE_KEYS.map(function (s) { return s.name; })),
+        get: function () { return self.sceneOverride; },
+        set: function (v) { self.sceneOverride = v; }
+      }
+    ];
   }
-});
+  // 把当前 STYLE.effects 同步进面板显示值（切风格后调用）
+  syncTweaks() {
+    this.tweaks.glowStrength = CONFIG.glowStrength;
+    this.tweaks.scanlineAlpha = CONFIG.scanlineAlpha;
+    this.tweaks.vignetteAlpha = CONFIG.vignetteAlpha;
+    this.tweaks.glitchInterval = CONFIG.glitchInterval;
+  }
+  toggle() {
+    if (!ENABLE_DEV_MODE) return;
+    devMode.visible = !devMode.visible;
+    if (devMode.visible) devMode.selectedIndex = 0;
+  }
+  adjust(dir, shift, alt) {
+    const it = this.items[devMode.selectedIndex];
+    if (!it) return;
+    if (it.type === 'enum') {
+      const n = it.values.length;
+      let i = it.values.indexOf(it.get());
+      if (i < 0) i = 0;
+      it.set(it.values[(i + dir + n) % n]);
+      return;
+    }
+    let step = (it.type === 'float') ? (it.max - it.min) * 0.01 : 1;
+    if (shift) step *= 10;
+    if (alt) step /= 10;
+    it.set(it.get() + dir * step);
+  }
+  handleKey(e) {
+    const k = e.key;
+    if (k === 'Escape') { devMode.visible = false; return true; }
+    if (k === 'ArrowUp') { devMode.selectedIndex = (devMode.selectedIndex + this.items.length - 1) % this.items.length; return true; }
+    if (k === 'ArrowDown') { devMode.selectedIndex = (devMode.selectedIndex + 1) % this.items.length; return true; }
+    if (k === 'ArrowLeft') { this.adjust(-1, e.shiftKey, e.altKey); return true; }
+    if (k === 'ArrowRight') { this.adjust(1, e.shiftKey, e.altKey); return true; }
+    if (k === 'r' || k === 'R') { this.reset(); return true; }
+    if (k === 'c' || k === 'C') { this.copyConfig(); return true; }
+    return false;
+  }
+  reset() {
+    STYLE.apply(STYLE.current || 'WHITE');
+    CONFIG.gridCols = 200; CONFIG.gridRows = 72; CONFIG.fpsTarget = 60;
+    this.sceneOverride = 'AUTO';
+    this.syncTweaks();
+    initGrid();
+  }
+  copyConfig() {
+    const cfg = {
+      style: STYLE.current,
+      glowStrength: Number(CONFIG.glowStrength.toFixed(2)),
+      scanlineAlpha: Number(CONFIG.scanlineAlpha.toFixed(2)),
+      vignetteAlpha: Number(CONFIG.vignetteAlpha.toFixed(2)),
+      glitchInterval: Number(CONFIG.glitchInterval.toFixed(2)),
+      gridCols: CONFIG.gridCols,
+      gridRows: CONFIG.gridRows,
+      fpsTarget: CONFIG.fpsTarget
+    };
+    const txt = JSON.stringify(cfg, null, 2);
+    const ok = function () { devPanel.copyMsg = performance.now(); };
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(ok, function () { devLog(txt); ok(); });
+      } else { devLog(txt); ok(); }
+    } catch (e) { devLog(txt); ok(); }
+  }
+  render(frame) {
+    const L = getL(), C = COL();
+    const w = Math.max(64, Math.floor(L.C * 0.55));
+    const h = this.items.length + 9;
+    const x = L.C - w - 2, y = L.R - h - 2;
+    // 半透明黑底：网格里用"清空 + 稀疏暗点"来模拟 rgba(0,0,0,.85)
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+      frame.erase(x + i, y + j);
+      if (((i + j) % 3) === 0) frame.set(x + i, y + j, '.', C.glowFar);
+    }
+    frame.box(x, y, w, h, C.bright, 'DEVELOPER MODE', C.pure);
+    frame.text(x + w - 14, y, '[D] CLOSE', C.light);
 
-function closeSidebarMobile(){
-  if(window.innerWidth <= 820){
-    sidebarEl.classList.remove('open');
-    sidebarMask.classList.remove('show');
+    for (let i = 0; i < this.items.length; i++) {
+      const it = this.items[i], sel = (i === devMode.selectedIndex);
+      const yy = y + 2 + i;
+      frame.text(x + 3, yy, sel ? '>' : ' ', C.pure);
+      frame.text(x + 5, yy, it.key.padEnd(19, ' '), sel ? C.pure : C.mid, sel);
+      if (it.type === 'enum') {
+        frame.text(x + 26, yy, '[ ' + String(it.get()).padEnd(10, ' ') + ' ]', sel ? C.bright : C.light);
+      } else {
+        const v = it.get();
+        const ratio = clamp((v - it.min) / (it.max - it.min), 0, 1);
+        const cells = 10, on = Math.round(ratio * cells);
+        frame.text(x + 26, yy, '[' + '█'.repeat(on) + '░'.repeat(cells - on) + ']', sel ? C.bright : C.light);
+        frame.rightText(x + w - 3, yy, (it.type === 'int' ? String(Math.round(v)) : v.toFixed(2)), sel ? C.pure : C.mid);
+      }
+    }
+    const hy = y + 2 + this.items.length + 1;
+    frame.text(x + 3, hy, '[↑↓] SELECT  [←→] ADJUST  [R] RESET  [C] COPY', C.mid);
+    frame.text(x + 3, hy + 2, 'FPS: ' + this.fpsShow.toFixed(1) + '   FRAME: ' + this.frameShow +
+      '   AUDIO: ' + fmtTime(this.audioShow), C.light);
+    if (performance.now() - this.copyMsg < 1500) frame.text(x + 3, hy + 3, 'COPIED TO CLIPBOARD', C.pure, true);
+    else if (this.sceneOverride !== 'AUTO') frame.text(x + 3, hy + 3, 'DEBUG: SCENE LOCKED @20s LOOP', C.alert);
   }
 }
-sidebarMask.addEventListener('click', closeSidebarMobile);
+const devPanel = new DevPanel();
+function devLog(s) { try { if (typeof console !== 'undefined' && console.log) console.log(s); } catch (e) { /* 忽略 */ } }
 
-el('clearAllBtn').addEventListener('click', () => {
-  if(!confirm('确定要清空所有对话吗？此操作不可恢复。')) return;
-  if(generating) stopGeneration();
-  state.conversations = [];
-  createConversation(false);
-  renderConversationList();
-  renderMessages();
-  toast('已清空');
-});
-
-/* ---- 设置 ---- */
-function openSettings(){
-  const s = getSettings();
-  el('setBaseUrl').value = s.baseUrl;
-  el('setApiKey').value  = s.apiKey;
-  el('setModel').value   = s.model;
-  el('setSystem').value  = s.systemPrompt;
-  el('setTemp').value    = s.temperature;
-  settingsModal.classList.add('show');
-  setTimeout(() => el('setBaseUrl').focus(), 50);
+/* ---------------------------------------------------------------------------
+   [20] 其它阶段：ERROR / END
+   --------------------------------------------------------------------------- */
+function renderErrorStage() {
+  const L = getL(), C = COL(), f = FRAME;
+  f.clear();
+  f.box(0, 0, L.C, L.R, C.alert);
+  f.centerText(8, '> ERROR: music.mp3 NOT FOUND.', C.alert, true);
+  f.centerText(11, '> PLACE music.mp3 IN THE SAME FOLDER AND REFRESH.', C.bright);
+  f.centerText(15, 'CANDIDATES TRIED: ' + AUDIO_CANDIDATES.join('  '), C.dark);
+  f.centerText(20, '[ OR DROP AN AUDIO FILE ONTO THIS WINDOW ]', C.mid);
+  f.centerText(L.R - 6, 'world.execute(me);  //  SELF SYSTEM FAILED TO WAKE', C.dark);
+  present(f);
 }
-function closeSettings(){ settingsModal.classList.remove('show'); }
+function renderEndStage() {
+  const L = getL(), C = COL(), f = FRAME;
+  f.clear();
+  f.box(0, 0, L.C, L.R, C.deep);
+  f.text(3, L.hdr, 'WORLD.EXECUTE(ME);', C.pure, true);
+  f.rightText(L.C - 4, L.hdr, 'HALTED', C.dark);
+  drawBig(f, 'TERMINATED', L.C / 2, L.R / 2 - 6, 1, 1, C.bright, true);
+  f.centerText(L.R / 2 + 2, '> SYSTEM TERMINATED.', C.pure, true);
+  f.centerText(L.R / 2 + 5, 'RUNTIME  ' + fmtTime(AUDIO.duration) + '   FRAMES  ' + frameCount, C.mid);
+  f.centerText(L.R / 2 + 7, 'love := ♥  //  COMMITTED', C.light);
+  if ((FX.t * 1.4) % 1 < 0.6) f.centerText(L.R / 2 + 10, '█', C.pure, true);
+  drawHints(f, '[R] RELOAD', 'MILI — WORLD.EXECUTE(ME);');
+  present(f);
+}
 
-el('settingsBtn').addEventListener('click', () => { openSettings(); closeSidebarMobile(); });
-el('modalCloseBtn').addEventListener('click', closeSettings);
-el('btnCancel').addEventListener('click', closeSettings);
-settingsModal.addEventListener('click', (e) => {
-  if(e.target === settingsModal) closeSettings();
-});
-document.addEventListener('keydown', (e) => {
-  if(e.key === 'Escape' && settingsModal.classList.contains('show')) closeSettings();
-});
+/* 统一的"出帧"：光晕扩散 → 绘制离屏 → 合成到主画布 */
+function present(f) {
+  GlowEngine.process(f);
+  drawOffCanvas(f);
+  compositeToMain();
+}
 
-el('btnSaveSettings').addEventListener('click', () => {
-  const temp = parseFloat(el('setTemp').value);
-  const s = {
-    baseUrl: el('setBaseUrl').value.trim() || DEFAULT_SETTINGS.baseUrl,
-    apiKey: el('setApiKey').value.trim(),
-    model: el('setModel').value.trim() || DEFAULT_SETTINGS.model,
-    systemPrompt: el('setSystem').value,
-    temperature: isNaN(temp) ? DEFAULT_SETTINGS.temperature : Math.max(0, Math.min(2, temp))
+/* ---------------------------------------------------------------------------
+   [21] 主循环 / 输入 / 初始化
+   时间基准：MV 阶段只认 audio.currentTime；其它阶段用 performance.now（不计入 MV 时间轴）。
+   --------------------------------------------------------------------------- */
+let STAGE = 'STYLE';
+let stageStart = 0;
+let lastRender = 0, frameCount = 0, fpsValue = 60, fpsAcc = 0, fpsN = 0;
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  if (!(typeof now === 'number' && isFinite(now))) now = performance.now();
+  // 目标帧率上限（跳过回调即可，不额外注册 rAF，避免帧队列堆积）
+  if (now - lastRender < 1000 / CONFIG.fpsTarget - 0.6) return;
+  let dt = (now - lastRender) / 1000;
+  if (!(dt > 0) || dt > 0.5) dt = 1 / 60;
+  lastRender = now;
+  dt = Math.min(dt, 1 / 15);                 // dt 钳制，防螺旋死亡
+  frameCount++;
+
+  fpsAcc += dt; fpsN++;
+  if (fpsAcc >= 0.4) {
+    fpsValue = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0;
+    devPanel.fpsShow = fpsValue; devPanel.frameShow = frameCount; devPanel.audioShow = AUDIO.time;
+    // 自适应画质：掉帧就降辉光预算，回升了再慢慢加回来
+    if (fpsValue < 45) CONFIG.glowBudget = Math.max(140, CONFIG.glowBudget - 60);
+    else if (fpsValue > 57) CONFIG.glowBudget = Math.min(420, CONFIG.glowBudget + 30);
+  }
+
+  updateFX(dt);
+  syncAudioState();
+
+  switch (STAGE) {
+    case 'STYLE': {
+      const f = FRAME;
+      f.clear();
+      styleSelector.render(f);
+      present(f);
+      break;
+    }
+    case 'TRANSITION': renderTransition(); break;
+    case 'LOADING': renderLoadingStage(dt); break;
+    case 'DIALOG': renderDialogStage(); break;
+    case 'MV': {
+      if (audioStartTime < 0) audioStartTime = AUDIO.time;   // 起播后第一帧记下基准
+      if (AUDIO.el && AUDIO.el.ended) { enterStage('END'); break; }
+      if (AUDIO.paused && !AUDIO.blocked) break;      // 暂停时不重绘，画面保留
+      renderMVStage();
+      break;
+    }
+    case 'END': renderEndStage(); break;
+    default: renderErrorStage(); break;
+  }
+}
+
+function enterStage(s) {
+  STAGE = s;
+  stageStart = performance.now();
+  FX.fade = Math.max(FX.fade, 0.9);
+  if (s === 'LOADING') { LOAD.shown = 0; LOAD.t0 = performance.now(); LOAD.done = false; LOAD.forced = false; showInputBox(false); }
+  if (s === 'DIALOG') {
+    DLG.t0 = performance.now(); DLG.phase = 'boot'; DLG.extra = null; DLG.goT = 0;
+    showInputBox(false);
+  }
+  if (s === 'MV') { showInputBox(false); CONFIG.glowBoost = 1.0; }
+  if (s === 'ERROR') showInputBox(false);
+}
+function startMV() {
+  enterStage('MV');
+  try { if (typeof audioEl.currentTime === 'number') audioEl.currentTime = 0; } catch (e) { /* 忽略 */ }
+  AUDIO.blocked = false;
+  safePlay();
+  audioStartTime = -1;                     // 下一帧用真实 currentTime 取基准
+  // 若浏览器仍然拦截（没有用户手势），主循环里会显示 CLICK TO SYNC
+  try { setTimeout(function () { if (STAGE === 'MV' && AUDIO.paused) AUDIO.blocked = true; }, 800); } catch (e) { /* 忽略 */ }
+}
+
+/* ---- 输入事件 ---- */
+function gridFromEvent(e) {
+  const r = mainCanvas.getBoundingClientRect ? mainCanvas.getBoundingClientRect() : { left: 0, top: 0 };
+  const v = viewRect();
+  const px = (e.clientX - r.left) - v.dx;
+  const py = (e.clientY - r.top) - v.dy;
+  return {
+    x: Math.floor(px / (v.dw / CONFIG.gridCols)),
+    y: Math.floor(py / (v.dh / CONFIG.gridRows))
   };
-  try{ localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }catch(e){}
-  closeSettings();
-  updateModelBadge();
-  toast('设置已保存');
-});
-
-function updateModelBadge(){
-  const s = getSettings();
-  modelBadge.textContent = s.model || '-';
-  modelBadge.title = s.baseUrl;
+}
+function onKeyDown(e) {
+  const k = e.key;
+  unlockAudio();
+  if (ENABLE_DEV_MODE && devMode.visible) { if (devPanel.handleKey(e)) { e.preventDefault(); return; } }
+  if (k === 'd' || k === 'D') {
+    // 开场对话阶段（还没输入 hello）按 D 不生效；读取/过渡阶段同样忽略
+    if (ENABLE_DEV_MODE && (STAGE === 'STYLE' || STAGE === 'MV' || STAGE === 'END')) devPanel.toggle();
+    e.preventDefault();
+    return;
+  }
+  switch (STAGE) {
+    case 'STYLE':
+      styleSelector.handleKey(e);
+      break;
+    case 'LOADING':
+      if (k === 'Enter') { LOAD.forced = true; e.preventDefault(); }
+      break;
+    case 'DIALOG':
+      if (k === 'Enter' && DLG.phase === 'input') { dlgSubmit(); e.preventDefault(); }
+      break;
+    case 'MV':
+      if (k === ' ' || k === 'Spacebar') {
+        if (AUDIO.paused) safePlay(); else safePause();
+        e.preventDefault();
+      } else if (k === 'ArrowLeft') { try { audioEl.currentTime = Math.max(0, AUDIO.time - 10); } catch (er) { } e.preventDefault(); }
+      else if (k === 'ArrowRight') { try { audioEl.currentTime = Math.min(AUDIO.duration - 0.2, AUDIO.time + 10); } catch (er) { } e.preventDefault(); }
+      break;
+    case 'END':
+      if (k === 'r' || k === 'R') { try { location.reload(); } catch (er) { } }
+      break;
+    default: break;
+  }
+}
+function bindEvents() {
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('resize', function () { resize(); });
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) safePause();          // 切后台自动暂停，回来手动 SPACE 继续
+  });
+  mainCanvas.addEventListener('pointermove', function (e) {
+    if (STAGE !== 'STYLE') return;
+    const g = gridFromEvent(e);
+    styleSelector.pointer(g.x, g.y, false);
+  });
+  mainCanvas.addEventListener('pointerdown', function (e) {
+    unlockAudio();
+    if (STAGE === 'MV' && AUDIO.blocked) { AUDIO.blocked = false; safePlay(); return; }
+    if (STAGE !== 'STYLE') return;
+    const g = gridFromEvent(e);
+    styleSelector.pointer(g.x, g.y, true);
+  });
+  window.addEventListener('dragover', function (e) { e.preventDefault(); });
+  window.addEventListener('drop', function (e) {
+    e.preventDefault();
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (!files || !files.length) return;
+    if (typeof URL === 'undefined' || !URL.createObjectURL) return;   // file:// 下大部分浏览器仍可用
+    try {
+      audioEl.src = URL.createObjectURL(files[0]);
+      AUDIO.ok = false; AUDIO.failed = false; AUDIO.duration = 0;
+      if (typeof audioEl.load === 'function') audioEl.load();
+      if (STAGE === 'ERROR') enterStage('STYLE');
+    } catch (er) { /* 忽略 */ }
+  });
+  inputEl.addEventListener('keydown', function (e) {
+    e.stopPropagation();                        // 打字时不要把按键交给全局（否则 d 会开面板）
+    if (e.key === 'Enter' && DLG.phase === 'input') { dlgSubmit(); e.preventDefault(); }
+    if (e.key === 'Escape') { inputEl.blur(); }
+  });
+  inputEl.addEventListener('input', function () {
+    inputEl.style.color = CONFIG.colors.bright || '#ffffff';
+  });
 }
 
-/* ---- 窗口尺寸变化 ---- */
-window.addEventListener('resize', () => {
-  if(window.innerWidth > 820){
-    sidebarEl.classList.remove('open');
-    sidebarMask.classList.remove('show');
-  }
+/* ---- 音频事件 ---- */
+audioEl.addEventListener('loadedmetadata', function () {
+  const d = audioEl.duration;
+  if (typeof d === 'number' && isFinite(d) && d > 0) { AUDIO.duration = d; AUDIO.ok = true; buildLyrics(d); }
 });
+audioEl.addEventListener('durationchange', function () {
+  const d = audioEl.duration;
+  if (typeof d === 'number' && isFinite(d) && d > 0 && !AUDIO.ok) { AUDIO.duration = d; AUDIO.ok = true; buildLyrics(d); }
+});
+audioEl.addEventListener('error', function () {
+  if (AUDIO.ok) return;                         // 播放中途出错不切换源
+  loadSource(AUDIO.idx + 1);
+});
+audioEl.addEventListener('ended', function () { if (STAGE === 'MV') enterStage('END'); });
 
-/* ============================================================
- *  启动
- * ============================================================ */
-function init(){
-  loadState();
-  renderConversationList();
-  renderMessages();
-  updateModelBadge();
-  autoResize();
-
-  if(!getSettings().apiKey){
-    setTimeout(() => toast('请先点击左下角「设置」配置 API Key'), 700);
-  }
-  inputEl.focus();
+/* ---- 启动 ---- */
+const styleSelector = new StyleSelector();
+function boot() {
+  resize();
+  initGrid();
+  styleSelector.init();
+  STAGE = 'STYLE';
+  stageStart = performance.now();
+  bindEvents();
+  layoutInputBox();
+  loadSource(0);                                // 从 music.mp3 开始尝试（元素自带 src，这里确保走统一流程）
+  requestAnimationFrame(loop);
+  previewLoop();
 }
-
-init();
-
-})();
+boot();
 </script>
 </body>
 </html>
