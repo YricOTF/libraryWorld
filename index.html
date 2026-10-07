@@ -113,6 +113,8 @@ canvas { touch-action: none; }
       <button data-act="up">▲</button>
       <button data-act="ok">OK</button>
       <button data-act="down">▼</button>
+      <button data-act="yes">Y</button>
+      <button data-act="no">N</button>
       <button data-act="audio">AUDIO</button>
       <button data-act="dev">DEV</button>
     </div>
@@ -3876,8 +3878,8 @@ function onKeyDown(e) {
   unlockAudio();
   // 关机确认：Y / Enter 关机，N 进入搜索
   if (STAGE === 'SHUTDOWN') {
-    if (k === 'y' || k === 'Y' || k === 'Enter') { SHUT.phase = 'out'; SHUT.outT0 = performance.now(); }
-    else if (k === 'n' || k === 'N') { SEEK.started = false; SEEK.text = ''; SEEK.ok = false; enterStage('SEARCH_INPUT'); }
+    if (k === 'y' || k === 'Y' || k === 'Enter') shutPick('yes');
+    else if (k === 'n' || k === 'N') shutPick('no');
     e.preventDefault();
     return;
   }
@@ -3946,6 +3948,17 @@ function bindEvents() {
     unlockAudio();
     if (STAGE === 'MV' && AUDIO.blocked) { AUDIO.blocked = false; safePlay(); return; }
     // 第二首 MV：点缩略图浮出结果弹窗；弹窗开着时点任意处关闭
+    if (STAGE === 'SHUTDOWN') {                       // 点 Y / N 按钮
+      const gs = gridFromEvent(e);
+      if (gs && gs.y >= SHUT_BTN.yy && gs.y <= SHUT_BTN.yy + 2) {
+        if (gs.x >= SHUT_BTN.yx && gs.x < SHUT_BTN.yx + 22) { shutPick('yes'); return; }
+        if (gs.x >= SHUT_BTN.nx && gs.x < SHUT_BTN.nx + 22) { shutPick('no'); return; }
+      }
+      return;
+    }
+    if (STAGE === 'SEARCH_INPUT') {                   // 点画面 = 聚焦输入框，唤起软键盘
+      seekFocus(true); return;
+    }
     if (STAGE === 'MV' && SONGS.current === 'search') {
       const gm = gridFromEvent(e);
       if (SEARCH_POP.open) { SEARCH_POP.open = false; return; }
@@ -4377,6 +4390,8 @@ function padSync() {
   padShow('down', st === 'STYLE' || st === 'MV');
   padShow('ok', st === 'STYLE' || st === 'DIALOG' || st === 'MV' || st === 'LOADING');
   padShow('audio', st === 'STYLE' || st === 'ERROR');
+  padShow('yes', st === 'SHUTDOWN');
+  padShow('no', st === 'SHUTDOWN');
   padShow('dev', st === 'MV' && ENABLE_DEV_MODE);
   for (let i = 0; i < padBtns.length; i++) {              // 只按阶段换标签，不读 textContent 兜底
     const bt = padBtns[i];
@@ -4388,10 +4403,13 @@ function padSync() {
 const PAD_LABEL = {
   'STYLE:ok': 'OK', 'STYLE:audio': 'AUDIO', 'STYLE:up': '▲', 'STYLE:down': '▼',
   'MV:ok': '❚❚', 'MV:up': '◀◀', 'MV:down': '▶▶', 'MV:dev': 'DEV',
-  'DIALOG:ok': 'SEND', 'LOADING:ok': 'SKIP'
+  'DIALOG:ok': 'SEND', 'LOADING:ok': 'SKIP', 'SEARCH_INPUT:ok': 'ENTER'
 };
 function padAct(act) {
   unlockAudio();
+  if (act === 'yes') { shutPick('yes'); return; }
+  if (act === 'no') { shutPick('no'); return; }
+  if (STAGE === 'SEARCH_INPUT' && act === 'ok') { if (!SEEK.ok && seekCheck()) SEEK.okP = 0; return; }
   if (act === 'audio') { srcOpen(!SRC.open); return; }
   if (act === 'dev') { devPanel.toggle(); return; }
   if (STAGE === 'STYLE') {
@@ -4980,21 +4998,68 @@ function scene_search_chorus(t, u) {
     }
   }
 }
+/* 桥段不再是一坨噪声，按歌词分三段：
+   "bucket of love" → 几只容器（有的满有的空）
+   "cut into pieces / break us down" → 打散成小块
+   "merge us back up" → 收拢成人形                                            */
+function bridgeBuckets(frame, A, C, u) {
+  const L = A.L;
+  for (let k = 0; k < 3; k++) {
+    const bx = A.cx + (k - 1) * Math.round(A.S * 1.5);
+    const by = A.cy + Math.round(A.S * 0.45);
+    const w = Math.round(A.S * 0.42);
+    // 桶身（梯形）
+    for (let j = 0; j < w * 1.5; j++) {
+      frame.set(bx - w + Math.round(j * 0.16), by - w + j, '\\', C.dark);
+      frame.set(bx + w - Math.round(j * 0.16), by - w + j, '/', C.dark);
+    }
+    for (let i = -w; i <= w; i++) frame.set(bx + i, by - w, '-', C.mid, true);
+    for (let i = -w + 2; i <= w - 2; i++) frame.set(bx + i, by + Math.round(w * 0.5), '_', C.dark);
+    // 里面装的心：第 0 只空、第 1 只半满、第 2 只满
+    const fill = [0, 0.5, 1][k];
+    const n = Math.round(fill * 5);
+    for (let i = 0; i < n; i++) {
+      const hx = bx - w + 3 + (i % 3) * 4, hy = by - Math.round(w * 0.5) + Math.floor(i / 3) * 2;
+      frame.text(hx, hy, '<3', k === 2 ? C.alert : C.bright, k === 2);
+    }
+    frame.centerText(by + Math.round(w * 0.5) + 2, ['EMPTY', 'HALF', 'FILLED UP'][k], C.deep);
+  }
+}
 function scene_search_bridge(t, u) {
   const frame = FRAME;      // 六个场景都从这里取帧缓冲                        // 拆解与重组
   const A = searchArea(), L = A.L, C = COL();
-  const cells = [];
-  for (let y = L.mainTop; y <= L.mainBot; y += 2) {
-    for (let x = L.cx0 + 2; x <= L.cx1 - 2; x += 3) {
-      const h = hash11(x * 1.1 + y * 2.7);
-      if (h < 0.34) continue;
-      const pull = (u < 0.5) ? (0.35 + u) : (1.35 - u);     // 先散开再收拢
-      const px = Math.round(A.cx + (x - A.cx) * pull);
-      const py = Math.round(A.cy + (y - A.cy) * pull);
-      frame.set(px, py, h > 0.72 ? '#' : (h > 0.5 ? '*' : '+'), h > 0.72 ? C.bright : C.mid, h > 0.72);
+  const en = VIS.line ? VIS.line.en : '';
+  if (/bucket of love|filled up|some of us/i.test(en)) {
+    bridgeBuckets(frame, A, C, u);                          // ① 爱情的容器
+  } else if (/cut this into pieces|break us down/i.test(en)) {
+    // ② 切碎：块从中心向外飞散，并标出 CELL
+    for (let y = L.mainTop; y <= L.mainBot; y += 2) {
+      for (let x = L.cx0 + 2; x <= L.cx1 - 2; x += 3) {
+        const h = hash11(x * 1.1 + y * 2.7);
+        if (h < 0.4) continue;
+        const q = (VIS.p || 0);
+        const px = Math.round(A.cx + (x - A.cx) * (1 + q * 1.1));
+        const py = Math.round(A.cy + (y - A.cy) * (1 + q * 1.1));
+        if (px < L.cx0 || px > L.cx1) continue;
+        frame.set(px, py, h > 0.7 ? '#' : (h > 0.5 ? '*' : '+'), h > 0.7 ? C.bright : C.mid, h > 0.7);
+      }
     }
+    frame.centerText(L.mainBot - 2, 'BREAKING DOWN TO CELL', C.alert);
+  } else {
+    // ③ 重组：块向中心收拢，逐渐聚成人形
+    const q = clamp(VIS.p || 0, 0, 1);
+    for (let y = L.mainTop; y <= L.mainBot; y += 2) {
+      for (let x = L.cx0 + 2; x <= L.cx1 - 2; x += 3) {
+        const h = hash11(x * 1.1 + y * 2.7);
+        if (h < 0.4) continue;
+        const px = Math.round(x + (A.cx - x) * q * 0.85);
+        const py = Math.round(y + (A.cy - y) * q * 0.85);
+        frame.set(px, py, h > 0.7 ? '#' : (h > 0.5 ? '*' : '+'), h > 0.7 ? C.bright : C.mid, h > 0.7);
+      }
+    }
+    drawForm(frame, 'human', A.cx, A.cy, A.S * (0.6 + q * 0.7), C.pure, C.dark, q);
+    if (q > 0.6) frame.centerText(L.mainBot - 2, 'EVOLVED', C.alert, true);
   }
-  if (u > 0.62) drawForm(frame, 'human', A.cx, A.cy, A.S * (0.5 + (u - 0.62) * 1.2), C.bright, C.dark, (u - 0.62) / 0.38);
 }
 function scene_search_outro(t, u) {
   const frame = FRAME;      // 六个场景都从这里取帧缓冲                         // 找到：人形轮廓 + 最后只剩标题
@@ -5184,6 +5249,13 @@ function renderSearchStage() {
   }
   // 网格段：让加号自己弹出结果卡（动画），用户点击仍能开大弹窗
   if (si === 4 || (VIS.m && VIS.m.form === 'grid')) searchAutoPopups(f, searchArea(), t);
+  if (AUDIO.blocked) {
+    // 自动播放被拦：必须提示"点一下"，否则歌放不出来、画面停在开头
+    const L2 = getL(), C2 = COL();
+    const blink2 = (performance.now() % 1000) < 520;
+    frame.centerText(Math.round(L2.R * 0.5), blink2 ? '> CLICK ANYWHERE TO SYNC <' : '', C2.alert, true);
+    frame.centerText(Math.round(L2.R * 0.5) + 2, 'the browser blocked autoplay', C2.dark);
+  }
   drawSearchPopup(f);
   present(f);
 }
@@ -5210,6 +5282,12 @@ function drawLyricsSearch(frame, t) {
 
 /* ---------- SHUTDOWN：MV 结束后的 Y/N ---------- */
 const SHUT = { t0: 0, phase: 'prompt', outT0: 0, line: 0 };
+const SHUT_BTN = { yx: 0, yy: 0, nx: 0, ny: 0 };   // Y / N 的可点区域（手机没键盘）
+function shutPick(what) {
+  if (SHUT.phase === 'out') return;
+  if (what === 'yes') { SHUT.phase = 'out'; SHUT.outT0 = performance.now(); }
+  else { SEEK.started = false; SEEK.text = ''; SEEK.ok = false; enterStage('SEARCH_INPUT'); }
+}
 function renderShutdownStage() {
   const f = FRAME, L = getL(), C = COL();
   const now = performance.now();
@@ -5236,7 +5314,16 @@ function renderShutdownStage() {
       const w = strW(lines[2]);
       f.set(Math.floor(L.C / 2 + w / 2) + 2, baseY + 6, '_', C.pure, true);
     }
-    f.centerText(L.R - 2, '[Y] SHUT DOWN      [N] SEARCH', C.dark);
+    // Y / N 画成能点的按钮：手机端没有键盘，光提示按键等于进不去第二首
+    const bw = 22, by2 = baseY + 9;
+    const yx = Math.floor(L.C / 2) - bw - 2, nx = Math.floor(L.C / 2) + 2;
+    for (const bb of [[yx, ' Y   SHUT DOWN '], [nx, ' N   SEARCH    ']]) {
+      for (let i = 0; i < bw; i++) { f.set(bb[0] + i, by2, '-', C.mid); f.set(bb[0] + i, by2 + 2, '-', C.mid); }
+      for (let j = 0; j <= 2; j++) { f.set(bb[0], by2 + j, '|', C.mid); f.set(bb[0] + bw - 1, by2 + j, '|', C.mid); }
+      f.text(bb[0] + 2, by2 + 1, bb[1], C.bright, true);
+    }
+    SHUT_BTN.yx = yx; SHUT_BTN.yy = by2; SHUT_BTN.nx = nx; SHUT_BTN.ny = by2;
+    f.centerText(L.R - 2, 'TAP A BUTTON   ·   OR PRESS  Y / N', C.dark);
   }
   if (SHUT.phase === 'out' && p >= 1) { try { location.reload(); } catch (e) { /* 忽略 */ } }
   present(f);
