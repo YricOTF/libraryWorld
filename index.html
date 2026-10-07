@@ -32,7 +32,7 @@ body { display: flex; align-items: center; justify-content: center; }
 }
 
 /* 行内输入框（对话 / 音频网址）：透明、无边框、颜色跟随当前风格 */
-#userInput, #urlInput {
+#userInput, #urlInput, #seekInput, #songInput {
   position: absolute; display: none;
   background: transparent; border: none; outline: none;
   border-bottom: 1px solid currentColor;
@@ -43,12 +43,27 @@ body { display: flex; align-items: center; justify-content: center; }
 #userInput::selection { background: rgba(255,255,255,.25); }
 
 /* ---- 触屏按钮条：只有触屏设备显示，样式跟着当前风格走（颜色由 JS 注入 currentColor） ---- */
+/* 侧栏形态：贴右边竖排，可折叠成一个把手（不再压住底部字幕区） */
 #pad {
-  position: absolute; left: 0; right: 0; bottom: 0;
-  display: none; gap: 6px; padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
-  box-sizing: border-box; touch-action: manipulation;
+  position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+  display: none; flex-direction: column; gap: 6px; padding: 6px;
+  width: calc(84px + env(safe-area-inset-right, 0px));
+  padding-right: calc(6px + env(safe-area-inset-right, 0px));
+  box-sizing: border-box; touch-action: manipulation; z-index: 3;
 }
 #pad.on { display: flex; }
+#pad.collapsed { display: none; }
+#padToggle {
+  position: absolute; top: 50%; transform: translateY(-50%); right: 0;
+  display: none; width: 30px; padding: 14px 0; z-index: 4;
+  font-family: 'Consolas', 'Menlo', 'Courier New', monospace;
+  font-size: 16px; line-height: 1; color: inherit; background: rgba(0,0,0,.6);
+  border: 1px solid currentColor; border-right: none; border-radius: 3px 0 0 3px;
+  opacity: .8; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+}
+#padToggle.on { display: block; }
+#padToggle.open { right: calc(84px + env(safe-area-inset-right, 0px)); border-right: 1px solid currentColor; border-radius: 3px; }
+#padToggle:active { opacity: 1; background: rgba(255,255,255,.14); }
 #pad button {
   flex: 1 1 0; min-height: 46px; padding: 0 4px;
   font-family: 'Consolas', 'Menlo', 'Courier New', monospace;
@@ -86,7 +101,14 @@ canvas { touch-action: none; }
     <!-- 音频来源面板里的网址输入框 + 隐藏的文件选择器 -->
     <input id="urlInput" type="text" maxlength="512" autocomplete="off" spellcheck="false">
     <input id="fileInput" type="file" accept="audio/*" style="display:none">
+    <!-- 搜索阶段的输入（透明文字，真正显示由画布网格负责，这样手机也能调起键盘） -->
+    <input id="seekInput" type="text" maxlength="40" autocomplete="off" autocapitalize="off"
+           autocorrect="off" spellcheck="false">
+    <!-- 风格页：输入歌名直接从某一首开始 -->
+    <input id="songInput" type="text" maxlength="32" autocomplete="off" autocapitalize="off"
+           autocorrect="off" spellcheck="false">
     <!-- 触屏按钮条（样式跟随当前风格，颜色用 currentColor 注入） -->
+    <button id="padToggle">›</button>
     <div id="pad">
       <button data-act="up">▲</button>
       <button data-act="ok">OK</button>
@@ -172,6 +194,23 @@ const CONFIG = {
 };
 
 /* 六套视觉风格预设（完整参数，运行时通过 STYLE.apply 注入 CONFIG） */
+/* 第二首专用风格：暖米黄纸色，柔和现代界面（无扫描线 / 无色偏 / 胶片颗粒） */
+const CREAM_PRESET = {
+  id: 'CREAM', name: 'CREAM PAPER', nameCN: '米黄',
+  description: 'Warm cream paper, soft modern interface, film grain',
+  descriptionCN: '暖米黄纸色，柔和现代界面，胶片颗粒',
+  colors: {
+    bright: '#F5E6C8', pure: '#FFF8E7', light: '#E8D8B8',
+    mid: '#D4C4A0', dark: '#A89878', deep: '#4A3F2E',
+    alert: '#E8956A', glowNear: '#C8B898', glowFar: '#8A7A5A',
+    black: '#1A1610'
+  },
+  effects: {
+    glowStrength: 0.8, scanlineAlpha: 0.0, vignetteAlpha: 0.7,
+    glitchInterval: 15.0, chromaticAberration: 0, bloomRadius: 2
+  }
+};
+
 const STYLE_PRESETS = [
   {
     id: 'WHITE', name: 'COLD WHITE', nameCN: '冷白',
@@ -262,10 +301,18 @@ const STYLE_PRESETS = [
       glowStrength: 0.6, scanlineAlpha: 0.10, vignetteAlpha: 0.40,
       glitchInterval: 12.0, chromaticAberration: 0, bloomRadius: 2
     }
-  }
+  },
+  CREAM_PRESET
 ];
 
 /* 运行时当前风格：所有绘制代码只准读 STYLE.colors / STYLE.effects */
+/* 曲目状态：第一首 world.execute(me); 第二首 world.search(you); */
+const SONGS = {
+  list: ['execute', 'search'],
+  current: 'execute',
+  src: { execute: null, search: null }        // 每首歌单独记忆用户选的音源
+};
+
 const STYLE = {
   current: null,
   colors: {},
@@ -300,6 +347,10 @@ const lerp = (a, b, k) => a + (b - a) * k;
 const easeInOut = k => (k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2);
 const easeOut = k => 1 - Math.pow(1 - k, 3);
 const easeIn = k => k * k * k;
+const easeOutBack = k => { const c1 = 1.70158, c3 = c1 + 1, q = k - 1; return 1 + c3 * q * q * q + c1 * q * q; };
+const easeInOutQuart = k => (k < 0.5 ? 8 * k * k * k * k : 1 - Math.pow(-2 * k + 2, 4) / 2);
+// 节拍相位 0..1：与 BEAT_BPM 同源，供歌词提亮 / 心跳 / 脉动共用（不引入独立计时器）
+function beatPhase(t) { const b = t * BEAT_BPM / 60; return 1 - (b - Math.floor(b)); }
 
 // 确定性伪随机：同一 (x,y) 每帧得到同一值 —— 场景在拖动进度后依然稳定，不会"抖动"
 function hash11(n) { const s = Math.sin(n * 127.1) * 43758.5453123; return s - Math.floor(s); }
@@ -487,6 +538,7 @@ const scanCtx = scanCanvas.getContext('2d');
 
 let DPR = 1;
 let FRAME = null;              // 复用的帧缓冲（热路径不新建对象）
+let STASH = { ch: null, co: null, gl: null };   // 场景溶解过渡时暂存整帧
 let scanPattern = null, scanDirty = true;
 let vignette = null, vignetteDirty = true;
 
@@ -538,6 +590,8 @@ function initGrid() {
   tintCanvas.width = offCanvas.width;
   tintCanvas.height = offCanvas.height;
   FRAME = new Frame(CONFIG.gridCols, CONFIG.gridRows);
+  const _n = CONFIG.gridCols * CONFIG.gridRows;
+  STASH.ch = new Array(_n); STASH.co = new Array(_n); STASH.gl = new Uint8Array(_n);
   calibrateFont();
   scanDirty = true;
 }
@@ -592,14 +646,47 @@ function buildScanPattern() {
 /* 暗角：中心透明 → 四周黑，强度由 STYLE.effects.vignetteAlpha 控制 */
 function buildVignette() {
   const vw = mainCanvas.width / DPR, vh = mainCanvas.height / DPR;
+  // 暗角颜色跟随风格底色：第一首是纯黑，第二首是暖褐 #1A1610
+  const rgb = hexToRgb(CONFIG.colors.black || '#000000');
+  const rgba = function (a) { return 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + a + ')'; };
   vignette = mainCtx.createRadialGradient(
     vw / 2, vh / 2, Math.min(vw, vh) * 0.26,
     vw / 2, vh / 2, Math.max(vw, vh) * 0.74
   );
-  vignette.addColorStop(0, 'rgba(0,0,0,0)');
-  vignette.addColorStop(0.62, 'rgba(0,0,0,0.30)');
-  vignette.addColorStop(1, 'rgba(0,0,0,1)');
+  vignette.addColorStop(0, rgba(0));
+  vignette.addColorStop(0.62, rgba(0.30));
+  vignette.addColorStop(1, rgba(1));
   vignetteDirty = false;
+}
+/* 胶片颗粒：预生成 4 张噪点图循环使用（零逐帧分配），0.03 透明度叠加 */
+let grainTiles = [], grainPats = [], grainIdx = 0;
+function buildGrain() {
+  grainTiles = []; grainPats = [];
+  for (let k = 0; k < 4; k++) {
+    const c = document.createElement('canvas');
+    c.width = 96; c.height = 96;
+    const g = c.getContext('2d');
+    const img = g.createImageData(96, 96);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = (hash11(i * 0.731 + k * 17.3) * 255) | 0;
+      img.data[i] = v; img.data[i + 1] = (v * 0.95) | 0; img.data[i + 2] = (v * 0.88) | 0; img.data[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    grainTiles.push(c);
+    try { grainPats.push(mainCtx.createPattern(c, 'repeat')); } catch (e) { grainPats.push(null); }
+  }
+}
+function drawGrain(ctx, dx, dy, v) {
+  if (!grainPats.length) buildGrain();
+  grainIdx = (grainIdx + 1) % grainPats.length;      // 逐帧换图 → 颗粒在闪
+  const pat = grainPats[grainIdx];
+  if (!pat) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 0.03;
+  ctx.fillStyle = pat;
+  ctx.fillRect(0, 0, v.vw, v.vh);
+  ctx.restore();
 }
 
 /* ---------------------------------------------------------------------------
@@ -756,15 +843,37 @@ function compositeToMain() {
     dy += (Math.sin(t * 59 + 1.1) * 0.62 + Math.sin(t * 97 + 0.4) * 0.38 + rnd * 0.4) * s * 12;
   }
 
+  // 极缓慢的浮动漂移（两路慢正弦叠加，±2px 内）：静止画面也有"呼吸感"，
+  // 底衬与离屏底色同为当前风格的 black，位移不露出接缝
+  const dT = FX.t;
+  dx += Math.sin(dT * 0.23) * 1.5 + Math.sin(dT * 0.11 + 1.7) * 0.8;
+  dy += Math.cos(dT * 0.19 + 0.6) * 1.0 + Math.sin(dT * 0.07) * 0.6;
+
   // 1) 清晰层：完全不透明，保证字符主体锐利
   ctx.imageSmoothingEnabled = true;
   ctx.globalAlpha = 1.0;
   ctx.drawImage(offCanvas, dx, dy, v.dw, v.dh);
 
+  // 1.5) CREAM（第二首）：不做点阵光晕，改成对整幅做一次模糊叠加 —— 均匀柔光
+  const CREAM = (STYLE.current === 'CREAM');
+  if (CREAM) {
+    if (typeof ctx.filter === 'string' || ctx.filter === 'none') {
+      ctx.save();
+      ctx.filter = 'blur(' + Math.max(2, CONFIG.bloomRadius) + 'px)';
+      ctx.globalAlpha = 0.25;
+      ctx.drawImage(offCanvas, dx, dy, v.dw, v.dh);
+      ctx.restore();
+    } else {
+      ctx.globalAlpha = 0.22;
+      ctx.drawImage(offCanvas, dx, dy, v.dw, v.dh);
+      ctx.globalAlpha = 1;
+    }
+  }
+
   // 2) Bloom：缩到 1/2.4 与 1/7.2 再放大回来（半径已降为原来的 0.6 倍），
   //    两层合计透明度 0.35，只做柔和扩散，不再糊屏。
   const glow = CONFIG.glowStrength * CONFIG.glowBoost;
-  if (glow > 0.02) {
+  if (!CREAM && glow > 0.02) {
     const flick = 1 + (hash11(FX.t * 13.3) - 0.5) * 0.05;   // 荧光管轻微亮度抖动
     bloomACtx.globalCompositeOperation = 'copy';
     bloomACtx.drawImage(offCanvas, 0, 0, bloomA.width, bloomA.height);
@@ -780,9 +889,12 @@ function compositeToMain() {
 
   // 3) 轻微锐化：以 overlay 再叠一层原图，把被 Bloom 抬起来的暗部压回去
   //    （放在扫描线/暗角之前，避免把 CRT 覆盖层一起提亮）
-  ctx.globalCompositeOperation = 'overlay';
-  ctx.globalAlpha = 0.15;
-  ctx.drawImage(offCanvas, dx, dy, v.dw, v.dh);
+  if (!CREAM) {                                  // 第二首保持柔和，不做锐化
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.globalAlpha = 0.15;
+    ctx.drawImage(offCanvas, dx, dy, v.dw, v.dh);
+    ctx.globalCompositeOperation = 'source-over';
+  }
 
   // 4) RGB 分离：红用 alert 色、另一路用 bright 色（不引入风格外颜色；
   //    纯黑白风格下 chromaticAberration = 0，自动退化为无色偏）
@@ -792,15 +904,19 @@ function compositeToMain() {
     drawTinted(ctx, C.bright, ab, 0.45, dx, dy, v.dw, v.dh);
   }
 
-  // 5) 扫描线（缓慢下滑）
-  if (scanDirty || !scanPattern) buildScanPattern();
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.globalAlpha = 1;
-  ctx.save();
-  ctx.translate(0, FX.scanOffset);
-  ctx.fillStyle = scanPattern;
-  ctx.fillRect(0, -FX.scanOffset, v.vw, v.vh + 8);
-  ctx.restore();
+  // 5) 扫描线（缓慢下滑）—— 第二首没有扫描线
+  if (!CREAM) {
+    if (scanDirty || !scanPattern) buildScanPattern();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.save();
+    ctx.translate(0, FX.scanOffset);
+    ctx.fillStyle = scanPattern;
+    ctx.fillRect(0, -FX.scanOffset, v.vw, v.vh + 8);
+    ctx.restore();
+  } else {
+    drawGrain(ctx, dx, dy, v);                   // 换成胶片颗粒
+  }
 
   // 6) 暗角
   if (vignetteDirty || !vignette) buildVignette();
@@ -850,6 +966,15 @@ function placeInput(el, gx, gy, gw) {
   el.style.borderBottomColor = CONFIG.colors.bright || '#ffffff';
 }
 function layoutInputBox() { placeInput(inputEl, INPUT_GRID.x, INPUT_GRID.y, INPUT_GRID.w); }
+function showSongBox(on) {
+  const el = document.getElementById('songInput');
+  if (!el) return;
+  if (!on) { el.style.display = 'none'; return; }
+  const L = getL(), v = viewRect();
+  placeInput(el, Math.floor(L.C / 2) - 22, L.R - 7, 44);
+  el.style.display = 'block';
+  try { el.focus(); } catch (e) { /* 忽略 */ }
+}
 function showInputBox(on) {
   if (on) { layoutInputBox(); inputEl.style.display = 'block'; }
   else { inputEl.style.display = 'none'; inputEl.value = ''; }
@@ -862,68 +987,68 @@ function showInputBox(on) {
    同时换任何一版音频（时长不同）都不用改数据。
    --------------------------------------------------------------------------- */
 const LRC = [
-  [0.100, 'Switch on the power line', '接通电源'],
+  [0.100, 'Switch on the power line', '接上电源线'],
   [1.740, 'Remember to put on', '记得戴上'],
   [2.920, 'PROTECTION', '防护'],
-  [3.873, 'Lay down your pieces', '放下你的棋子'],
-  [5.491, "And let's begin", '让我们开始'],
+  [3.873, 'Lay down your pieces', '摆好你的棋子'],
+  [5.491, "And let's begin", '让我们开始吧'],
   [6.380, 'OBJECT CREATION', '对象创建'],
   [7.446, 'Fill in my data parameters', '填好我的数据参数'],
   [10.091, 'INITIALIZATION', '初始化'],
-  [11.095, 'Set up our new world', '建立我们的新世界'],
+  [11.095, 'Set up our new world', '搭建我们的新世界'],
   [12.906, "And let's begin the", '让我们开始这场'],
   [13.891, 'SIMULATION', '模拟'],
   [16.000, 'world.execute(me);', '世界.执行(我);'],
   [29.709, "If I'm a set of points", '如果我是一组点'],
-  [31.116, 'Then I will give you my', '那我会给你我的'],
+  [31.116, 'Then I will give you my', '那我就给你我的'],
   [32.682, 'DIMENSION', '维度'],
   [33.412, "If I'm a circle", '如果我是一个圆'],
-  [34.646, 'Then I will give you my', '那我会给你我的'],
+  [34.646, 'Then I will give you my', '那我就给你我的'],
   [36.287, 'CIRCUMFERENCE', '周长'],
   [37.067, "If I'm a sine wave", '如果我是正弦波'],
   [38.596, 'Then you can sit on all my', '那你就能坐在我所有的'],
   [40.049, 'TANGENTS', '切线上'],
-  [40.706, 'If I approach infinity', '如果我趋近无穷'],
+  [40.706, 'If I approach infinity', '如果我趋近于无穷'],
   [42.346, 'Then you can be my', '那你就能成为我的'],
   [43.507, 'LIMITATIONS', '极限'],
   [44.452, 'Switch my current', '切换我的电流'],
-  [45.850, 'To AC to DC', '交流变直流'],
-  [47.672, 'And then blind my vision', '然后弄瞎我的视线'],
-  [49.534, 'So dizzy so dizzy', '好晕 好晕'],
-  [51.363, 'Oh we can travel', '我们能穿越'],
-  [53.225, 'To A.D to B.C', '公元前后'],
-  [55.083, 'And we can unite', '我们能结合'],
+  [45.850, 'To AC to DC', '交流转直流'],
+  [47.672, 'And then blind my vision', '然后弄瞎我的视觉'],
+  [49.534, 'So dizzy so dizzy', '好晕啊 好晕啊'],
+  [51.363, 'Oh we can travel', '噢 我们能穿越'],
+  [53.225, 'To A.D to B.C', '从公元后到公元前'],
+  [55.083, 'And we can unite', '我们能融为一体'],
   [56.916, 'So deeply so deeply', '如此深 如此深'],
   [59.223, 'If I can', '如果我能'],
-  [59.687, 'If I can give you all the', '如果我能给你所有的'],
+  [59.687, 'If I can give you all the', '如果我能给你全部的'],
   [61.958, 'STIMULATIONS', '刺激'],
   [62.589, 'Then I can', '那我就能'],
   [63.535, 'Then I can be your only', '那我就能成为你唯一的'],
   [65.397, 'SATISFACTION', '满足'],
   [66.601, 'If I can make you happy', '如果我能让你快乐'],
   [68.252, 'I will run the', '我会运行'],
-  [69.259, 'EXECUTION', '处决'],
-  [70.084, 'Though we are trapped', '尽管我们被困在'],
+  [69.259, 'EXECUTION', '执行'],
+  [70.084, 'Though we are trapped', '尽管我们被困住'],
   [71.764, 'In this strange strange', '这个奇怪又奇怪的'],
   [73.169, 'SIMULATION', '模拟之中'],
-  [74.045, "If I'm an eggplant", '如果我是茄子'],
-  [75.422, 'Then I will give you my', '那我会给你我的'],
+  [74.045, "If I'm an eggplant", '如果我是一根茄子'],
+  [75.422, 'Then I will give you my', '那我就给你我的'],
   [76.959, 'NUTRIENTS', '养分'],
-  [77.576, "If I'm a tomato", '如果我是番茄'],
-  [79.226, 'Then I will give you', '那我会给你'],
+  [77.576, "If I'm a tomato", '如果我是一颗番茄'],
+  [79.226, 'Then I will give you', '那我就给你'],
   [80.620, 'ANTIOXIDANTS', '抗氧化剂'],
-  [81.351, "If I'm a tabby cat", '如果我是虎斑猫'],
-  [82.833, 'Then I will purr for your', '那我会为你呼噜'],
-  [84.268, 'ENJOYMENT', '只为取悦你'],
+  [81.351, "If I'm a tabby cat", '如果我是一只虎斑猫'],
+  [82.833, 'Then I will purr for your', '那我就为你呼噜'],
+  [84.268, 'ENJOYMENT', '愉悦'],
   [85.078, "If I'm the only god", '如果我是唯一的神'],
   [86.538, "Then you're the proof of my", '那你就是我存在的'],
   [87.922, 'EXISTENCE', '证明'],
   [88.587, 'Switch my gender', '切换我的性别'],
-  [90.197, 'To F to M', '女 变 男'],
+  [90.197, 'To F to M', '女转男'],
   [92.015, 'And then do whatever', '然后为所欲为'],
   [93.953, 'From AM to PM', '从早到晚'],
   [95.465, 'Oh switch my role', '切换我的角色'],
-  [97.739, 'To S to M', '受 变 施'],
+  [97.739, 'To S to M', '施与受'],
   [99.349, 'So we can enter', '这样我们就能进入'],
   [101.474, 'The trance the trance', '那恍惚 那恍惚'],
   [103.489, 'If I can feel your', '如果我能感受你的'],
@@ -937,13 +1062,13 @@ const LRC = [
   [115.780, 'You have left me in', '你把我留在'],
   [117.274, 'ISOLATION', '孤立之中'],
   [118.333, 'If I can', '如果我能'],
-  [118.979, 'If I can erase all the pointless', '如果我能抹去所有无谓的'],
+  [118.979, 'If I can erase all the pointless', '如果我能抹掉所有无谓的'],
   [120.860, 'FRAGMENTS', '碎片'],
   [121.728, 'Then maybe', '那也许'],
-  [122.714, "Then maybe you won't leave me so", '那也许你就不会让我如此'],
+  [122.714, "Then maybe you won't leave me so", '那也许你就不会让我这般'],
   [124.890, 'DISHEARTENED', '心碎'],
   [125.708, 'Challenging your god', '挑战你的神'],
-  [128.661, 'You have made some', '你已经提出了'],
+  [128.661, 'You have made some', '你已经犯下'],
   [131.224, 'ILLEGAL ARGUMENTS', '非法参数'],
   [147.660, 'EXECUTION', '执行'],
   [148.600, 'EXECUTION', '执行'],
@@ -964,14 +1089,14 @@ const LRC = [
   [161.124, 'LIU', '六'],
   [161.584, 'EXECUTION', '执行'],
   [162.632, 'If I can', '如果我能'],
-  [163.315, 'If I can give them all the', '如果我能给他们所有的'],
+  [163.315, 'If I can give them all the', '如果我能给他们全部的'],
   [165.166, 'EXECUTION', '执行'],
   [166.016, 'Then I can', '那我就能'],
   [167.022, 'Then I can be your only', '那我就能成为你唯一的'],
   [168.911, 'EXECUTION', '执行'],
   [169.824, 'If I can have you back', '如果我能让你回来'],
-  [171.868, 'I will run the EXECUTION', '我会执行 处决'],
-  [173.643, 'Though we are trapped', '尽管我们被困'],
+  [171.868, 'I will run the EXECUTION', '我会执行这场处决'],
+  [173.643, 'Though we are trapped', '尽管我们被困住'],
   [174.975, 'We are trapped ah', '我们被困住了 啊'],
   [177.246, "I've studied", '我研究过'],
   [178.173, "I've studied how to properly", '我研究过如何正确地'],
@@ -1116,6 +1241,18 @@ function drawBig(frame, str, cx, cy, xs, ys, color, glow) {
    --------------------------------------------------------------------------- */
 function getL() {
   const C = CONFIG.gridCols, R = CONFIG.gridRows;
+  if (SONGS.current === 'search') {
+    // 第二首：没有侧栏 / 状态栏 / 进度条，只有顶部一行、中部画布、底部歌词
+    return {
+      C: C, R: R,
+      top: 0, hdr: 1, chap: 3, rule: 4, sub: 6, sub2: 7,
+      mainTop: 3, mainBot: Math.round(R * 0.72),
+      status: R - 15, note: R - 14, wave: R - 12,
+      lyr: R - 9, lyrCn: R - 6, hint: R - 2, bot: R - 1,
+      panLx: 2, panRx: C - 28, panW: 26,
+      cx0: 4, cx1: C - 5
+    };
+  }
   return {
     C: C, R: R,
     top: 0, hdr: 1, chap: 3, rule: 4, sub: 6, sub2: 7,
@@ -1202,8 +1339,9 @@ function drawLyrics(frame, t, total) {
   const shown = clamp(Math.floor(age * 26), 0, cur.en.length);
   const enTxt = cur.en.slice(0, shown);
   const x0 = Math.floor((L.C - strW(cur.en)) / 2);
-  frame.text(x0, L.lyr, enTxt, C.bright, true);
-  if ((FX.t * 2) % 1 < 0.62) frame.set(x0 + strW(enTxt), L.lyr, '█', C.pure, true);
+  const bp = Math.pow(beatPhase(t), 3);      // 节拍脉冲：重拍瞬间整句提亮
+  frame.text(x0, L.lyr, enTxt, bp > 0.72 ? C.pure : C.bright, true);
+  if ((FX.t * 2) % 1 < 0.62) frame.set(x0 + strW(enTxt), L.lyr, '█', bp > 0.5 ? C.pure : C.mid, true);
   if (cur.cn) {
     const shownCn = clamp(Math.floor(age * 21), 0, cur.cn.length);
     frame.text(Math.floor((L.C - strW(cur.cn)) / 2), L.lyrCn, cur.cn.slice(0, shownCn), C.mid);
@@ -1875,6 +2013,19 @@ const POST_ROWS = [
   'CALL .................. world.execute(me);'
 ];
 
+/* ---------- 自检表每一行对应的执行语句 ---------- */
+const POST_CODE = [
+  'self.power = 12.0;',
+  'self.protection = SEALED;',
+  'load(pieces, 16);',
+  'obj = new Object();',
+  'params = { n: 65536 };',
+  'init(self);',
+  'world = new World();',
+  'sim.run();',
+  'world.execute(me);'
+];
+
 /* ---------- EXECUTION 连唱时控制台刷的语句池 ---------- */
 const CODE_LINES = [
   'exec(world, me);',
@@ -1900,22 +2051,22 @@ const MOTIF_RULES = [
   // 否则 /simulation/ 这类规则会把 73 秒那句 SIMULATION 也一并抓走。
   // VERSE 1
   [/set of points/i,       { k: 'math', f: 'points', label: "IF I'M A SET OF POINTS", sub: 'P = { p1, p2, ... pn }' }],
-  [/dimension/i,           { k: 'math', f: 'axes3d', label: 'DIMENSION', sub: 'x, y, z  =  3' }],
+  [/dimension/i,           { k: 'math', f: 'axes3d', code: 'me.dim = 3;', label: 'DIMENSION', sub: 'x, y, z  =  3' }],
   [/i'm a circle/i,        { k: 'math', f: 'circle', label: "IF I'M A CIRCLE", sub: 'x² + y² = r²' }],
-  [/circumference/i,       { k: 'math', f: 'circum', label: 'CIRCUMFERENCE', sub: 'C = 2πr' }],
+  [/circumference/i,       { k: 'math', f: 'circum', code: 'me.circumference();', label: 'CIRCUMFERENCE', sub: 'C = 2πr' }],
   [/sine wave/i,           { k: 'math', f: 'sine', label: "IF I'M A SINE WAVE", sub: 'y = sin(x)' }],
-  [/tangents/i,            { k: 'math', f: 'tangent', label: 'TANGENTS', sub: "y' = cos(x)" }],
-  [/approach infinity/i,   { k: 'math', f: 'infinity', label: 'IF I APPROACH INFINITY', sub: 'n → INF' }],
-  [/limitations/i,         { k: 'math', f: 'limit', label: 'LIMITATIONS', sub: 'lim  f(x),  x → 0' }],
+  [/tangents/i,            { k: 'math', f: 'tangent', code: 'me.tangentAt(x);', label: 'TANGENTS', sub: "y' = cos(x)" }],
+  [/approach infinity/i,   { k: 'math', f: 'infinity', code: 'while (me < Infinity)', label: 'IF I APPROACH INFINITY', sub: 'n → INF' }],
+  [/limitations/i,         { k: 'math', f: 'limit', code: 'if (me.has(LIMITATIONS))', label: 'LIMITATIONS', sub: 'lim  f(x),  x → 0' }],
   // VERSE 2
-  [/switch my current/i,   { k: 'math', f: 'ac', label: 'SWITCH MY CURRENT', sub: 'AC  ~' }],
-  [/to ac to dc/i,         { k: 'math', f: 'dc', label: 'TO AC TO DC', sub: 'rectified' }],
-  [/blind my vision/i,     { k: 'art', a: 'blinds', label: 'AND THEN BLIND MY VISION', sub: 'vision = null' }],
-  [/so dizzy/i,            { k: 'math', f: 'spiral', label: 'SO DIZZY SO DIZZY', sub: 'spin' }],
-  [/we can travel/i,       { k: 'part', f: 'streak', label: 'OH WE CAN TRAVEL', sub: 'warp' }],
-  [/to a\.d to b\.c/i,     { k: 'math', f: 'timeline', label: 'TO A.D TO B.C', sub: 'time.reverse()' }],
-  [/we can unite/i,        { k: 'math', f: 'merge', label: 'AND WE CAN UNITE', sub: 'A + B = AB' }],
-  [/so deeply/i,           { k: 'math', f: 'rings', label: 'SO DEEPLY SO DEEPLY', sub: 'depth++' }],
+  [/switch my current/i,   { k: 'math', f: 'ac', code: 'me.current.switch(AC);', label: 'SWITCH MY CURRENT', sub: 'AC  ~' }],
+  [/to ac to dc/i,         { k: 'math', f: 'dc', code: 'me.current = rectify(ac);', label: 'TO AC TO DC', sub: 'rectified' }],
+  [/blind my vision/i,     { k: 'art', a: 'blinds', code: 'me.vision = null;', label: 'AND THEN BLIND MY VISION', sub: 'vision = null' }],
+  [/so dizzy/i,            { k: 'math', f: 'spiral', code: 'me.spin(2 * PI);', label: 'SO DIZZY SO DIZZY', sub: 'spin' }],
+  [/we can travel/i,       { k: 'part', f: 'streak', code: 'travel(me, A.D, B.C);', label: 'OH WE CAN TRAVEL', sub: 'warp' }],
+  [/to a\.d to b\.c/i,     { k: 'math', f: 'timeline', code: 'time.reverse();', label: 'TO A.D TO B.C', sub: 'time.reverse()' }],
+  [/we can unite/i,        { k: 'math', f: 'merge', code: 'me.unite(you);', label: 'AND WE CAN UNITE', sub: 'A + B = AB' }],
+  [/so deeply/i,           { k: 'math', f: 'rings', code: 'me.depth++;', label: 'SO DEEPLY SO DEEPLY', sub: 'depth++' }],
   // CHORUS
   [/stimulations/i,        { k: 'math', f: 'scope', label: 'STIMULATIONS', sub: 'amplitude x MAX' }],
   [/satisfaction/i,        { k: 'math', f: 'fillbar', label: 'SATISFACTION', sub: 'scale = MAX' }],
@@ -1926,36 +2077,36 @@ const MOTIF_RULES = [
   [/^simulation$/i,        { k: 'math', f: 'web', label: 'SIMULATION', sub: 'while (alive) step()' }],
   // VERSE 3
   [/eggplant/i,            { k: 'art', a: 'egg', label: "IF I'M AN EGGPLANT", sub: 'botany.load()' }],
-  [/nutrients/i,           { k: 'math', f: 'molecule', rings: 1, formula: 'C6H8O6   VITAMIN C', label: 'NUTRIENTS', sub: 'give(you)' }],
+  [/nutrients/i,           { k: 'math', f: 'molecule', rings: 1, formula: 'C6H8O6   VITAMIN C', code: 'me.give(you, nutrients);', label: 'NUTRIENTS', sub: 'give(you)' }],
   [/tomato/i,              { k: 'art', a: 'tomato', label: "IF I'M A TOMATO", sub: 'botany.load()' }],
-  [/antioxidants/i,        { k: 'math', f: 'chain', links: 10, formula: 'C40H56   LYCOPENE', label: 'ANTIOXIDANTS', sub: 'shield(you)' }],
+  [/antioxidants/i,        { k: 'math', f: 'chain', links: 10, formula: 'C40H56   LYCOPENE', code: 'me.shield(you);', label: 'ANTIOXIDANTS', sub: 'shield(you)' }],
   [/tabby cat/i,           { k: 'art', a: 'cat', label: "IF I'M A TABBY CAT", sub: 'meow' }],
-  [/purr/i,                { k: 'art', a: 'wave', label: 'I WILL PURR FOR YOUR', sub: 'prrrrrrr' }],
-  [/enjoyment/i,           { k: 'art', a: 'heart', label: 'ENJOYMENT', sub: 'you = happy' }],
+  [/purr/i,                { k: 'art', a: 'wave', code: 'me.purr(0x7F);', label: 'I WILL PURR FOR YOUR', sub: 'prrrrrrr' }],
+  [/enjoyment/i,           { k: 'art', a: 'heart', code: 'you.enjoy(me);', label: 'ENJOYMENT', sub: 'you = happy' }],
   [/only god/i,            { k: 'art', a: 'sun', label: "IF I'M THE ONLY GOD", sub: 'genesis' }],
-  [/proof of my/i,         { k: 'art', a: 'eye', label: "YOU'RE THE PROOF OF MY", sub: 'observed = true' }],
-  [/existence/i,           { k: 'art', a: 'dot', label: 'EXISTENCE', sub: 'I AM' }],
+  [/proof of my/i,         { k: 'art', a: 'eye', code: 'proof = you;', label: "YOU'RE THE PROOF OF MY", sub: 'observed = true' }],
+  [/existence/i,           { k: 'art', a: 'dot', code: 'assert(me.exists());', label: 'EXISTENCE', sub: 'I AM' }],
   // VERSE 4
-  [/switch my gender/i,    { k: 'art', a: 'gender', label: 'SWITCH MY GENDER', sub: 'F <-> M' }],
-  [/to f to m/i,           { k: 'art', a: 'gender', label: 'TO F TO M', sub: 'F <-> M' }],
-  [/do whatever/i,         { k: 'part', f: 'scatter', label: 'AND THEN DO WHATEVER', sub: 'no rules' }],
-  [/am to pm/i,            { k: 'art', a: 'clock', label: 'FROM AM TO PM', sub: '24h loop' }],
-  [/switch my role/i,      { k: 'art', a: 'role', label: 'OH SWITCH MY ROLE', sub: 'S <-> M' }],
-  [/to s to m/i,           { k: 'art', a: 'role', label: 'TO S TO M', sub: 'S <-> M' }],
-  [/we can enter/i,        { k: 'math', f: 'spiral', label: 'SO WE CAN ENTER', sub: 'entering...' }],
-  [/the trance/i,          { k: 'math', f: 'spiral', label: 'THE TRANCE THE TRANCE', sub: 'hypnosis' }],
+  [/switch my gender/i,    { k: 'art', a: 'gender', code: 'me.gender.switch();', label: 'SWITCH MY GENDER', sub: 'F <-> M' }],
+  [/to f to m/i,           { k: 'art', a: 'gender', code: 'me.gender = F | M;', label: 'TO F TO M', sub: 'F <-> M' }],
+  [/do whatever/i,         { k: 'part', f: 'scatter', code: 'me.do(whatever);', label: 'AND THEN DO WHATEVER', sub: 'no rules' }],
+  [/am to pm/i,            { k: 'art', a: 'clock', code: 'while (AM -> PM) tick();', label: 'FROM AM TO PM', sub: '24h loop' }],
+  [/switch my role/i,      { k: 'art', a: 'role', code: 'me.role.switch();', label: 'OH SWITCH MY ROLE', sub: 'S <-> M' }],
+  [/to s to m/i,           { k: 'art', a: 'role', code: 'me.role = S | M;', label: 'TO S TO M', sub: 'S <-> M' }],
+  [/we can enter/i,        { k: 'math', f: 'spiral', code: 'me.enter(trance);', label: 'SO WE CAN ENTER', sub: 'entering...' }],
+  [/the trance/i,          { k: 'math', f: 'spiral', code: 'while (trance) loop();', label: 'THE TRANCE THE TRANCE', sub: 'hypnosis' }],
   // VERSE 5-6：从这里开始画面逐步崩坏
-  [/feel your/i,           { k: 'math', f: 'scope', label: 'IF I CAN FEEL YOUR', sub: 'sensing...' }],
-  [/vibrations/i,          { k: 'math', f: 'scope', label: 'VIBRATIONS', sub: 'f = 1 / T' }],
-  [/finally be/i,          { k: 'math', f: 'fillbar', label: 'THEN I CAN FINALLY BE', sub: 'almost...' }],
-  [/completion/i,          { k: 'text', s: 'COMPLETE', xs: 2, ys: 2, label: 'COMPLETION', sub: 'scale 100%' }],
-  [/you have left/i,       { k: 'math', f: 'walkaway', label: 'YOU HAVE LEFT', sub: 'peer lost' }],
+  [/feel your/i,           { k: 'math', f: 'scope', code: 'if (me.canFeel(you))', label: 'IF I CAN FEEL YOUR', sub: 'sensing...' }],
+  [/vibrations/i,          { k: 'math', f: 'scope', code: 'me.sense(vibrations);', label: 'VIBRATIONS', sub: 'f = 1 / T' }],
+  [/finally be/i,          { k: 'math', f: 'fillbar', code: 'me.state = COMPLETE;', label: 'THEN I CAN FINALLY BE', sub: 'almost...' }],
+  [/completion/i,          { k: 'text', s: 'COMPLETE', xs: 2, ys: 2, code: 'me.progress = 100;', label: 'COMPLETION', sub: 'scale 100%' }],
+  [/you have left/i,       { k: 'math', f: 'walkaway', code: 'if (!you) throw new Error();', label: 'YOU HAVE LEFT', sub: 'peer lost' }],
   [/left me in/i,          { k: 'math', f: 'walkaway', label: 'YOU HAVE LEFT ME IN', sub: 'peer lost' }],
-  [/isolation/i,           { k: 'art', a: 'dot', label: 'ISOLATION', sub: 'peers = 0' }],
-  [/erase all the pointless/i, { k: 'part', f: 'erase', label: 'ERASE ALL THE POINTLESS', sub: 'rm -rf' }],
-  [/fragments/i,           { k: 'part', f: 'erase', label: 'FRAGMENTS', sub: 'deleting...' }],
+  [/isolation/i,           { k: 'art', a: 'dot', code: 'network.peers = 0;', label: 'ISOLATION', sub: 'peers = 0' }],
+  [/erase all the pointless/i, { k: 'part', f: 'erase', code: 'mem.erase(pointless);', label: 'ERASE ALL THE POINTLESS', sub: 'rm -rf' }],
+  [/fragments/i,           { k: 'part', f: 'erase', code: 'mem.free(fragments);', label: 'FRAGMENTS', sub: 'deleting...' }],
   [/then maybe/i,          { k: 'part', f: 'erase', label: 'THEN MAYBE', sub: 'maybe...' }],
-  [/disheartened/i,        { k: 'art', a: 'crack', label: 'DISHEARTENED', sub: 'heart.status = BROKEN' }],
+  [/disheartened/i,        { k: 'art', a: 'crack', code: 'me.heart.break();', label: 'DISHEARTENED', sub: 'heart.status = BROKEN' }],
   [/challenging your god/i,{ k: 'art', a: 'beam', label: 'CHALLENGING YOUR GOD', sub: 'permission denied' }],
   [/made some/i,           { k: 'redbig', s: 'ERROR', boom: 0.5, label: 'YOU HAVE MADE SOME', sub: 'raising exception' }],
   [/illegal arguments/i,   { k: 'redbig', s: 'ILLEGAL', boom: 0.8, label: 'ILLEGAL ARGUMENTS', sub: 'EXCEPTION 0x1A2B' }],
@@ -2025,12 +2176,15 @@ function drawMotif(frame, m, p) {
   const subY = labelY + 2;
   const col = m.alert ? ((((stepT(12) * 2.6) % 1) < 0.45) ? C.alert : C.pure) : C.bright;
 
-  if (m.k === 'art') stampArt(frame, m.a, cx, cy, col, true, 2);
+  // 入场回弹：句子的前 1/3 内主体视觉从极小值带过冲地弹性放大到位
+  const pop = easeOutBack(clamp(p / 0.35, 0, 1));
+  if (m.k === 'art') stampArt(frame, m.a, cx, cy, col, true, 2 * clamp(pop, 0.2, 1.18));
   else if (m.k === 'math') drawFigure(frame, m, p, col, C.dark, C.pure);
   else if (m.k === 'text') {
     // s2 存在时按句内进度换字（"NE FEM" = quatre + cinq，4 和 5 分开显示）
     const glyph = (m.s2 && p >= 0.5) ? m.s2 : m.s;
-    drawBig(frame, glyph, cx, cy, m.xs || 2, m.ys || 2, col, true);
+    const ps = clamp(pop, 0.2, 1.18);
+    drawBig(frame, glyph, cx, cy, (m.xs || 2) * ps, (m.ys || 2) * ps, col, true);
   }
   else if (m.k === 'part') drawParticles(frame, m.f, p, cx, cy);
   else if (m.k === 'post') {
@@ -2038,8 +2192,11 @@ function drawMotif(frame, m, p) {
     // 自检表整体左对齐（POST 屏的观感），不用居中
     const top = L.mainTop + Math.round(H * 0.10);
     const x0 = L.cx0 + 4;
+    const codeX = x0 + 36;                       // 右侧代码列
     frame.text(x0, top, 'ME SYSTEM SELF TEST', C.pure, true);
     frame.text(x0, top + 1, 'POST / SELF TEST v2.1.4', C.deep);
+    frame.text(codeX, top, 'EXECUTING', C.mid);
+    frame.text(codeX, top + 1, '// live statement trace', C.deep);
     for (let i = 0; i < POST_ROWS.length; i++) {
       if (i > m.row) break;
       const cur = (i === m.row);
@@ -2050,6 +2207,13 @@ function drawMotif(frame, m, p) {
       frame.text(x0, y, (cur && k < 1) ? '[..]' : '[OK]', (cur && k < 1) ? C.mid : C.light, !cur || k >= 1);
       frame.text(x0 + 5, y, shown, cur ? C.bright : C.mid, cur);
       if (cur && k < 1 && (FX.t * 4) % 1 < 0.6) frame.set(x0 + 5 + strW(shown), y, '█', C.pure, true);
+      // 右半边并排显示这一行正在执行的语句：一行检查 = 一行代码
+      const code = POST_CODE[i] || '';
+      if (code) {
+        const typed = cur ? Math.round(clamp(p / 0.5, 0, 1) * code.length) : code.length;
+        frame.text(codeX, y, '> ' + code.slice(0, Math.max(1, typed)),
+          i === m.row ? C.light : C.dark, i === m.row);
+      }
     }
     const frac = (m.row + clamp(p / 0.5, 0, 1)) / POST_ROWS.length;
     const cells = 30, on = Math.round(frac * cells);
@@ -2083,6 +2247,45 @@ function drawMotif(frame, m, p) {
     for (let i = 0; i < w; i++) frame.erase(x0 + i, subY);
     frame.centerText(subY, m.sub, C.mid);
   }
+  if (m.code) {
+    // 这句歌词对应的执行语句（跟着一起打出来）
+    const codeY = Math.min(L.mainBot - 1, subY + 2);
+    const w = strW(m.code) + 6, x0 = Math.floor((L.C - w) / 2);
+    for (let i = 0; i < w; i++) frame.erase(x0 + i, codeY);
+    frame.centerText(codeY, '> ' + m.code, C.dark, false);
+  }
+}
+
+
+/* ---------- 场景边界溶解过渡（动画优化新增）：双渲染 + 按格概率混合 ---------- */
+function stashFrame(f) {
+  const n = f.cols * f.rows;
+  for (let i = 0; i < n; i++) { STASH.ch[i] = f.ch[i]; STASH.co[i] = f.co[i]; STASH.gl[i] = f.gl[i]; }
+}
+/* f 里此刻是"下一场景"的整帧；按进度 k 把旧帧逐格溶回。
+   每格用 hash 决定自己的切换时机 —— 同一进度下画面稳定，不闪不抖（拖动进度条也不乱）。 */
+function dissolveFrames(f, k) {
+  const cols = f.cols;
+  for (let y = 0; y < f.rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const i = y * cols + x;
+      if (STASH.ch[i] === f.ch[i] && STASH.co[i] === f.co[i]) continue;   // 相同格跳过
+      if (hash2(x * 1.31, y * 1.97) < k) continue;      // 该格已切到新场景
+      f.ch[i] = STASH.ch[i]; f.co[i] = STASH.co[i]; f.gl[i] = STASH.gl[i];
+    }
+  }
+}
+/* 第一首：当前归一化时间是否落在某条场景边界前的过渡窗内 */
+function sceneBlendInfo(norm) {
+  const dur = (AUDIO.duration && isFinite(AUDIO.duration) && AUDIO.duration > 0) ? AUDIO.duration : 211.91;
+  const W = Math.min(0.02, 2.6 / dur);                 // 过渡窗 2.6 秒（换算成归一化时长）
+  for (let i = 0; i < SCENE_KEYS.length - 1; i++) {
+    const end = SCENE_KEYS[i].end;
+    if (norm >= end - W && norm < end) {
+      return { k: easeInOutQuart((norm - (end - W)) / W), next: SCENE_KEYS[i + 1].name };
+    }
+  }
+  return null;
 }
 
 /* ===== 场景 1：CREATION —— 开机自检（4 个子阶段，问题 2）================= */
@@ -2701,28 +2904,10 @@ const SUBTITLES = {
   RELEASE: 'CONNECTION LOST — DUMPING MEMORY',
   LOVE: 'love := ♥  //  FINAL ASSIGNMENT'
 };
-function renderMVStage() {
-  const L = getL(), C = COL(), f = FRAME;
-  const total = (AUDIO.duration && isFinite(AUDIO.duration) && AUDIO.duration > 0) ? AUDIO.duration : 1;
-  const t = mvTime();                       // 问题 4：音频已播秒数 - 起播时刻
-  const norm = clamp(t / total, 0, 1);
-
-  // —— 场景判定（开发者面板可强制锁定）——
-  let sceneName, sceneNorm = norm;
+function renderMVContent(f, sceneName, sceneNorm, norm, t, total) {
+  const L = getL(), C = COL();
   const ov = devMode.visible ? devPanel.sceneOverride : 'AUTO';
-  if (ov !== 'AUTO') {
-    sceneName = ov;
-    const s = sceneByName(ov);
-    // 调试模式：场景时间按 0-1 循环，每 20 秒一轮
-    const local = (performance.now() / 20000) % 1;
-    sceneNorm = s.start + local * (s.end - s.start);
-  } else {
-    // 问题 5：场景由歌词边界决定（每帧查一次当前落在哪个区间）
-    const s = getCurrentScene(norm);
-    sceneName = s.name;
-  }
   const u = sceneLocal(sceneName, sceneNorm);
-  updateLyricVis(t, total);        // 歌词视觉层：当前歌词 + 行内进度
 
   f.clear();
   // 外框（机壳内的显示区域）
@@ -2771,12 +2956,51 @@ function renderMVStage() {
 
   if (devMode.visible) devPanel.render(f);
 
+}
+
+function renderMVStage() {
+  if (SONGS.current === 'search') { renderSearchStage(); return; }
+  const f = FRAME;
+  const total = (AUDIO.duration && isFinite(AUDIO.duration) && AUDIO.duration > 0) ? AUDIO.duration : 1;
+  const t = mvTime();                       // 音频已播秒数 - 起播时刻
+  const norm = clamp(t / total, 0, 1);
+
+  // —— 场景判定（开发者面板可强制锁定）——
+  let sceneName, sceneNorm = norm;
+  const ov = devMode.visible ? devPanel.sceneOverride : 'AUTO';
+  if (ov !== 'AUTO') {
+    sceneName = ov;
+    const s = sceneByName(ov);
+    // 调试模式：场景时间按 0-1 循环，每 20 秒一轮
+    const local = (performance.now() / 20000) % 1;
+    sceneNorm = s.start + local * (s.end - s.start);
+  } else {
+    const s = getCurrentScene(norm);
+    sceneName = s.name;
+  }
+  // 切章瞬间：一记短故障 + 轻震 + 微闪白，强化"换章"手感
+  if (sceneName !== renderMVStage._last) {
+    if (renderMVStage._last) { triggerGlitch(0.22); triggerShake(0.30); triggerFlash(0.08); }
+    renderMVStage._last = sceneName;
+  }
+  updateLyricVis(t, total);        // 歌词视觉层：当前歌词 + 行内进度（渲染前统一更新一次）
+
+  renderMVContent(f, sceneName, sceneNorm, norm, t, total);
+  // —— 场景边界溶解：临界的 2.6 秒内整帧重绘下一场景，再按格概率混合（ASCII crossfade）——
+  const blend = (ov === 'AUTO' && STASH.ch && STASH.ch.length === f.cols * f.rows) ? sceneBlendInfo(norm) : null;
+  if (blend) {
+    stashFrame(f);
+    renderMVContent(f, blend.next, sceneNorm, norm, t, total);
+    dissolveFrames(f, blend.k);
+  }
+
   // 后处理：LOVE 终章辉光拉满
   if (sceneName !== 'LOVE') CONFIG.glowBoost = 1.0;   // LOVE 的辉光由场景内部按子阶段写
   GlowEngine.process(f);
   drawOffCanvas(f);
   compositeToMain();
 }
+
 const C_BRAND = 'MILI // WORLD.EXECUTE(ME);';
 
 /* ---------------------------------------------------------------------------
@@ -2874,6 +3098,10 @@ class StyleSelector {
       bad ? C.alert : C.mid);
     if (performance.now() - SRC.flash < 900) frame.box(ax, ay, aw, 4, C.bright, 'AUDIO SOURCE', C.pure);
     this.audioBox = { x: ax, y: ay, w: aw, h: 4 };
+    // 从哪一首开始（按 F 或点这行；默认走原来的流程）
+    const cur2 = START.open ? (START.text || '') : 'world.execute(me);';
+    frame.centerText(L.R - 7, '[F] START FROM : ' + cur2 + (START.note ? '   ' + START.note : ''), C.dark);
+    this.startBox = { x: Math.floor(L.C / 2) - 24, y: L.R - 7, w: 48, h: 1 };
 
     // 操作提示
     frame.centerText(L.R - 6, '[↑↓] NAVIGATE   [ENTER] CONFIRM   [1-6] QUICK PICK   [M] OPEN AUDIO PANEL' +
@@ -3005,7 +3233,10 @@ function renderTransition() {
    所有对 audio 元素的方法调用都做了 typeof 保护，避免在残缺环境里抛错。
    --------------------------------------------------------------------------- */
 const audioEl = document.getElementById('music');
-const AUDIO_CANDIDATES = ['music.mp3', 'music.flac', 'music.ogg', 'music.wav', 'music.m4a'];
+// 候选链：先用远端直链（部署到 GitHub Pages 时仓库里不必放音频），
+// 远端不通再回头找同目录的本地文件。
+const REMOTE_AUDIO = 'https://ycbasr-d5gvv7az2cb986021-1316612369.tcloudbaseapp.com/music.flac';
+const AUDIO_CANDIDATES = [REMOTE_AUDIO, 'music.mp3', 'music.flac', 'music.ogg', 'music.wav', 'music.m4a'];
 const AUDIO = { el: audioEl, duration: 0, time: 0, paused: true, ok: false, failed: false, blocked: false, idx: 0 };
 // 问题 4：MV 起播基准。-1 表示还没取到（起播后第一帧用真实 currentTime 校正）
 let audioStartTime = -1;
@@ -3023,6 +3254,7 @@ function safePause() { try { if (typeof audioEl.pause === 'function') audioEl.pa
 // 时长就绪 → 把 LRC 的绝对秒数换算成"占全曲的百分比"，并算出终章淡出的归一化起点
 // 时长就绪 → 按选定歌词源构建全局百分比时间轴（问题 3：歌词不再是场景内时间）
 function buildLyrics(d) {
+  if (SONGS.current === 'search') { buildLyricsSearch(d); return; }
   if (LYRICS_SOURCE === 'USER') {
     // 表里的 t 本来就是"占总时长百分比"，直接用；空行（结束标记）过滤掉
     CONFIG.lyrics = LYRICS_USER
@@ -3129,6 +3361,7 @@ const LOAD_SUBS = [
   { label: 'EMOTION MATRIX', a: -0.70, b: 1.35 }
 ];
 function renderLoadingStage(dt) {
+  if (LOAD.song === 'search') return renderSearchLoadStage(dt);
   const L = getL(), C = COL(), f = FRAME;
   const now = performance.now();
   const el = now - LOAD.t0;
@@ -3142,7 +3375,8 @@ function renderLoadingStage(dt) {
   if (!LOAD.done && real >= 0.995 && el > 1800) { LOAD.done = true; LOAD.doneT = now; }
   // 兜底：等太久（7 秒）就允许强行进入下一阶段，免得某些浏览器读不到 buffered 卡死在这里
   if (!LOAD.done && (el > 7000 || LOAD.forced)) { LOAD.done = true; LOAD.doneT = now; }
-  if (LOAD.done && now - LOAD.doneT > 900) { enterStage('DIALOG'); return; }
+  if (LOAD.done) LOAD.shown = Math.min(1, LOAD.shown + dt * 1.6);      // 完成态补满
+  if (LOAD.done && LOAD.shown >= 1 && now - LOAD.doneT > 900) { enterStage(LOAD.to || 'DIALOG'); return; }
 
   f.clear();
   f.box(0, 0, L.C, L.R, C.mid);
@@ -3475,11 +3709,14 @@ function renderErrorStage() {
   const L = getL(), C = COL(), f = FRAME;
   f.clear();
   f.box(0, 0, L.C, L.R, C.alert);
-  f.centerText(8, '> ERROR: music.mp3 NOT FOUND.', C.alert, true);
+  f.centerText(8, '> ERROR: ' + (SONGS.current === 'search' ? 'music2.mp3' : 'music.mp3') + ' NOT FOUND.', C.alert, true);
   f.centerText(11, '> PLACE music.mp3 IN THE SAME FOLDER AND REFRESH.', C.bright);
-  f.centerText(15, 'CANDIDATES TRIED: ' + AUDIO_CANDIDATES.join('  '), C.dark);
+  // 候选链现在含长直链，必须截断，否则会横穿整个屏幕
+  const tried = AUDIO_CANDIDATES.slice(0, 4).join('  ');
+  f.centerText(15, ('CANDIDATES TRIED: ' + tried).slice(0, L.C - 8), C.dark);
   f.centerText(20, '[ M ] CHOOSE ANOTHER SOURCE  ·  OR DROP AN AUDIO FILE HERE', C.mid);
-  f.centerText(L.R - 6, 'world.execute(me);  //  SELF SYSTEM FAILED TO WAKE', C.dark);
+  f.centerText(14, '[ R ] RELOAD   ·   or press M to pick another source', C.bright);
+  f.centerText(L.R - 6, SONGS.current === 'search' ? 'world.search(you);  //  INDEX BUILD FAILED' : 'world.execute(me);  //  SELF SYSTEM FAILED TO WAKE', C.dark);
   if (SRC.open) renderSrcPanel(f);          // ERROR 阶段也能换音频来源
   present(f);
 }
@@ -3500,7 +3737,8 @@ function renderEndStage() {
 
 /* 统一的"出帧"：光晕扩散 → 绘制离屏 → 合成到主画布 */
 function present(f) {
-  GlowEngine.process(f);
+  // 第二首走柔光模糊，不做逐字符点阵光晕
+  if (STYLE.current !== 'CREAM') GlowEngine.process(f);
   drawOffCanvas(f);
   compositeToMain();
 }
@@ -3549,6 +3787,15 @@ function loop(now) {
     case 'TRANSITION': padSync(); renderTransition(); break;
     case 'LOADING': padSync(); renderLoadingStage(dt); break;
     case 'DIALOG': padSync(); renderDialogStage(); break;
+    case 'SEARCH_INPUT': {
+      padSync();
+      if (SEEK.ok) {
+        SEEK.okP += dt * 1000;      // dt 是秒，计时器是毫秒
+        if (SEEK.okP >= 1200) { SEEK.started = false; startSearchSong(); }
+      }
+      renderSearchInputStage(dt);
+      break;
+    }
     case 'MV': {
       padSync();
       if (audioStartTime < 0) audioStartTime = AUDIO.time;   // 起播后第一帧记下基准
@@ -3557,12 +3804,40 @@ function loop(now) {
       renderMVStage();
       break;
     }
+    case 'SHUTDOWN': padSync(); renderShutdownStage(); break;
     case 'END': padSync(); renderEndStage(); break;
     default: padSync(); renderErrorStage(); break;
   }
 }
 
+/* 第二首的加载画面：搜索索引的进度条，风格与第二首一致 */
+function renderSearchLoadStage(dt) {
+  const L = getL(), C = COL(), f = FRAME, now = performance.now();
+  const real = bufferedRatio();
+  if (real >= 0) LOAD.shown = Math.max(LOAD.shown, real);
+  else LOAD.shown = Math.min(0.92, LOAD.shown + dt * 0.00006);
+  if (!LOAD.done && (LOAD.shown >= 0.995 || now - LOAD.t0 > 9000 || LOAD.forced)) { LOAD.done = true; LOAD.doneT = now; }
+  // 一旦进入完成态就把条补满再走 —— 否则超时触发时会"没跑完就跳走"
+  if (LOAD.done) LOAD.shown = Math.min(1, LOAD.shown + dt * 1.6);
+  if (LOAD.done && LOAD.shown >= 1 && now - LOAD.doneT > 700) { endLoading(); return; }
+  f.clear();
+  const cx = Math.floor(L.C / 2), cy = Math.round(L.R * 0.4);
+  f.centerText(cy - 6, 'SEARCHING...', C.mid);
+  const w = 46, on = Math.round(clamp(LOAD.shown, 0, 1) * w);
+  f.centerText(cy, '[' + '#'.repeat(on) + '.'.repeat(w - on) + ']', C.bright, true);
+  f.centerText(cy + 2, 'INDEXING ' + Math.round(clamp(LOAD.shown, 0, 1) * 100) + '%', C.dark);
+  f.centerText(cy + 6, 'music2  ·  world.search(you);', C.deep);
+  f.centerText(L.R - 2, LOAD.done ? 'READY' : 'PLEASE WAIT', LOAD.done ? C.bright : C.dark);
+  present(f);
+}
+function endLoading() {
+  LOAD.song = ''; LOAD.to = '';
+  // 必须走 startMV()：它会 currentTime=0 + play()，否则第二首根本没声音，
+  // 而且上一首遗留的 ended 状态会把画面直接推到结束页
+  startMV();
+}
 function enterStage(s) {
+  if (s !== 'SHUTDOWN' && SHUT.phase === 'out') SHUT.phase = 'prompt';
   STAGE = s;
   stageStart = performance.now();
   FX.fade = Math.max(FX.fade, 0.9);
@@ -3599,9 +3874,32 @@ function gridFromEvent(e) {
 function onKeyDown(e) {
   const k = e.key;
   unlockAudio();
+  // 关机确认：Y / Enter 关机，N 进入搜索
+  if (STAGE === 'SHUTDOWN') {
+    if (k === 'y' || k === 'Y' || k === 'Enter') { SHUT.phase = 'out'; SHUT.outT0 = performance.now(); }
+    else if (k === 'n' || k === 'N') { SEEK.started = false; SEEK.text = ''; SEEK.ok = false; enterStage('SEARCH_INPUT'); }
+    e.preventDefault();
+    return;
+  }
+  // 搜索输入：空格提交，其余交给 input 元素
+  if (STAGE === 'SEARCH_INPUT') {
+    if (k === ' ' || k === 'Spacebar') {
+      e.preventDefault();
+      if (!SEEK.ok && seekCheck()) SEEK.okP = 0;
+    }
+    return;
+  }
   // 音频来源面板打开时独占按键
   if ((STAGE === 'STYLE' || STAGE === 'ERROR') && SRC.open) { if (srcKey(e)) { e.preventDefault(); return; } }
   if ((k === 'm' || k === 'M') && (STAGE === 'STYLE' || STAGE === 'ERROR')) { srcOpen(!SRC.open); e.preventDefault(); return; }
+  // 风格页按 F：输入歌名，直接从那一首开始
+  if ((k === 'f' || k === 'F') && STAGE === 'STYLE') {
+    START.open = !START.open; START.note = '';
+    showSongBox(START.open);
+    if (START.open) { const el = document.getElementById('songInput'); if (el) el.value = ''; }
+    e.preventDefault();
+    return;
+  }
   if (ENABLE_DEV_MODE && devMode.visible) { if (devPanel.handleKey(e)) { e.preventDefault(); return; } }
   if (k === 'd' || k === 'D') {
     // 开场对话阶段（还没输入 hello）按 D 不生效；读取/过渡阶段同样忽略
@@ -3647,6 +3945,13 @@ function bindEvents() {
   mainCanvas.addEventListener('pointerdown', function (e) {
     unlockAudio();
     if (STAGE === 'MV' && AUDIO.blocked) { AUDIO.blocked = false; safePlay(); return; }
+    // 第二首 MV：点缩略图浮出结果弹窗；弹窗开着时点任意处关闭
+    if (STAGE === 'MV' && SONGS.current === 'search') {
+      const gm = gridFromEvent(e);
+      if (SEARCH_POP.open) { SEARCH_POP.open = false; return; }
+      if (gm && searchClickAt(gm.x, gm.y)) return;
+      return;
+    }
     // 音频来源面板优先处理：风格页和报错页都能点（原来被下面的 STAGE 判断挡掉了，
     // 报错页点 [2] UPLOAD 毫无反应，只剩拖拽能用）
     if (SRC.open) {
@@ -3664,7 +3969,7 @@ function bindEvents() {
         return;
       }
       const inX = gp.x > b.x && gp.x < b.x + b.w;
-      if (inX && gp.y >= b.y + 4 && gp.y <= b.y + 10 && (gp.y - b.y - 4) % 2 === 0) {
+      if (inX && gp.y >= b.y + 4 && gp.y <= b.y + 12 && (gp.y - b.y - 4) % 2 === 0) {
         SRC.sel = (gp.y - b.y - 4) / 2;
         srcActivate();                          // 面板里只有三个选项，单击直接执行
         return;
@@ -3673,6 +3978,12 @@ function bindEvents() {
     }
     if (STAGE !== 'STYLE') return;
     const g = gridFromEvent(e);
+    const sb = styleSelector.startBox;
+    if (sb && g.y === sb.y && g.x >= sb.x && g.x < sb.x + sb.w) {
+      START.open = true; START.note = ''; showSongBox(true);
+      const el = document.getElementById('songInput'); if (el) el.value = '';
+      return;
+    }
     const ab = styleSelector.audioBox;
     if (ab && g.y >= ab.y && g.y < ab.y + ab.h && g.x >= ab.x && g.x < ab.x + ab.w) {
       srcOpen(true);                          // 点 AUDIO SOURCE 框直接开面板
@@ -3711,6 +4022,25 @@ function bindEvents() {
     // 先不收起输入框：如果加载失败，用户可以直接改地址重试（Esc 收起）
     e.preventDefault();
   });
+  const seekEl = document.getElementById('seekInput');
+  if (seekEl) {
+    seekEl.addEventListener('input', function () { SEEK.text = String(seekEl.value || ''); });
+    seekEl.addEventListener('keydown', function (e) {
+      e.stopPropagation();
+      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (!SEEK.ok && seekCheck()) SEEK.okP = 0; }
+    });
+  }
+  const songEl = document.getElementById('songInput');
+  if (songEl) {
+    songEl.addEventListener('input', function () { START.text = String(songEl.value || ''); });
+    songEl.addEventListener('keydown', function (e) {
+      e.stopPropagation();
+      if (e.key === 'Escape') { START.open = false; showSongBox(false); return; }
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      startFromApply();
+    });
+  }
   fileInputEl.addEventListener('change', function () {
     const f = fileInputEl.files && fileInputEl.files[0];
     if (!f) return;
@@ -3727,7 +4057,30 @@ function bindEvents() {
    --------------------------------------------------------------------------- */
 const AUDIO_DEFAULT_CANDIDATES = AUDIO_CANDIDATES.slice();
 const SRC_KEY = 'world_execute_me_audio_url';
-const SRC = { open: false, sel: 0, mode: 'local', name: '', note: '', flash: 0, box: { x: 0, y: 0, w: 0, h: 0 } };
+/* 从哪一首开始：风格页按 F（或点那行）输入歌名，默认仍是原来的流程 */
+const START = { open: false, text: '', note: '', t: 0 };
+const SONG_ALIAS = [
+  [/search|世界.?搜索|第二|2/i, 'search'],
+  [/execute|执行|第一|1/i, 'execute']
+];
+function startFromMatch(s) {
+  const v = String(s || '').trim();
+  for (let i = 0; i < SONG_ALIAS.length; i++) if (SONG_ALIAS[i][0].test(v)) return SONG_ALIAS[i][1];
+  return v ? '?' : 'execute';
+}
+function startFromApply() {
+  const which = startFromMatch(START.text);
+  if (which === 'execute') {                 // 默认：走原来的流程
+    START.open = false; showSongBox(false);
+    START.note = '';
+    return;
+  }
+  if (which === '?') { START.note = 'UNKNOWN SONG'; return; }
+  START.open = false; showSongBox(false); START.note = '';
+  SONGS.current = 'search';                  // 直接进第二首（跳过第一首）
+  startSearchSong();
+}
+const SRC = { open: false, sel: 0, mode: 'local', name: '', note: '', flash: 0, target: 'execute', box: { x: 0, y: 0, w: 0, h: 0 } };
 
 function srcOpen(on) {
   SRC.open = !!on;
@@ -3737,6 +4090,14 @@ function srcOpen(on) {
 // 统一设置音频源（网址或 blob），并接管候选链
 function srcApplyUrl(u, mode, label) {
   if (!u) return;
+  SRC.mode = mode;
+  SRC.name = (label || u).slice(0, 40);
+  SRC.flash = performance.now();
+  SONGS.src[SRC.target] = { url: u, mode: mode, name: SRC.name };
+  if (SRC.target !== SONGS.current) {          // 给另一首设的，不动当前这首
+    SRC.note = 'SAVED FOR SONG ' + (SRC.target === 'search' ? 2 : 1) + '  ·  ' + SRC.name.slice(0, 18);
+    return;
+  }
   try {
     AUDIO_CANDIDATES.length = 0;
     AUDIO_CANDIDATES.push(u);
@@ -3752,8 +4113,14 @@ function srcApplyUrl(u, mode, label) {
   } catch (e) { SRC.note = 'SOURCE FAILED'; }
 }
 function srcUseBuiltin() {
+  SONGS.src[SRC.target] = null;
+  if (SRC.target !== SONGS.current) {
+    SRC.note = 'SONG ' + (SRC.target === 'search' ? 2 : 1) + '  →  BUILT-IN';
+    return;
+  }
+  const list = songCandidates(SRC.target);
   AUDIO_CANDIDATES.length = 0;
-  for (let i = 0; i < AUDIO_DEFAULT_CANDIDATES.length; i++) AUDIO_CANDIDATES.push(AUDIO_DEFAULT_CANDIDATES[i]);
+  for (let i = 0; i < list.length; i++) AUDIO_CANDIDATES.push(list[i]);
   AUDIO.idx = 0; AUDIO.ok = false; AUDIO.failed = false; AUDIO.duration = 0;
   SRC.mode = 'local'; SRC.name = ''; SRC.note = 'BUILT-IN SOURCE';
   loadSource(0);
@@ -3761,6 +4128,10 @@ function srcUseBuiltin() {
 function srcActivate() {
   if (SRC.sel === 0) srcUseBuiltin();
   else if (SRC.sel === 1) { try { fileInputEl.click(); } catch (e) { SRC.note = 'UPLOAD UNAVAILABLE'; } }
+  else if (SRC.sel === 4) {                       // 切换"这一套设置作用于哪首歌"
+    SRC.target = (SRC.target === 'search') ? 'execute' : 'search';
+    SRC.note = 'TARGET → ' + (SRC.target === 'search' ? 'SONG 2 (search)' : 'SONG 1 (execute)');
+  }
   else if (SRC.sel === 3) {
     DL.view = true; DL.sel = 0;
     if (cacheSupported()) cacheList().then(function (l) { DL.list = l; });
@@ -3790,9 +4161,9 @@ function srcKey(e) {
     return true;
   }
   if (k === 'Escape' || k === 'm' || k === 'M') { srcOpen(false); return true; }
-  if (k === 'ArrowUp') { SRC.sel = (SRC.sel + 3) % 4; return true; }
-  if (k === 'ArrowDown') { SRC.sel = (SRC.sel + 1) % 4; return true; }
-  if (k === '1' || k === '2' || k === '3' || k === '4') { SRC.sel = Number(k) - 1; return true; }
+  if (k === 'ArrowUp') { SRC.sel = (SRC.sel + 4) % 5; return true; }
+  if (k === 'ArrowDown') { SRC.sel = (SRC.sel + 1) % 5; return true; }
+  if (k === '1' || k === '2' || k === '3' || k === '4' || k === '5') { SRC.sel = Number(k) - 1; return true; }
   if (k === 'Enter') { srcActivate(); return true; }
   return false;
 }
@@ -3943,7 +4314,7 @@ function renderCacheList(frame) {
 function renderSrcPanel(frame) {
   const L = getL(), C = COL();
   if (DL.view) { renderCacheList(frame); return; }
-  const w = Math.min(104, L.C - 20), h = 17;
+  const w = Math.min(104, L.C - 20), h = 19;   // 现在有 5 项
   const x = Math.floor((L.C - w) / 2), y = Math.floor((L.R - h) / 2) - 3;
   SRC.box = { x: x, y: y, w: w, h: h };
   for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
@@ -3957,7 +4328,8 @@ function renderSrcPanel(frame) {
     ['2', 'UPLOAD FROM DISK', SRC.mode === 'file' ? (SRC.name || 'ACTIVE') : 'click here -> file dialog'],
     ['3', 'LOAD FROM URL', SRC.mode === 'url' ? (SRC.name || 'ACTIVE') : (cacheSupported() ? 'download into web cache' : 'type an http(s) address')],
     ['4', 'CACHED LIBRARY', !cacheSupported() ? 'needs https / localhost'
-      : (DL.list.length ? DL.list.length + ' song(s) offline' : 'empty — cache a url first')]
+      : (DL.list.length ? DL.list.length + ' song(s) offline' : 'empty — cache a url first')],
+    ['5', 'TARGET SONG', (SRC.target === 'search' ? 'SONG 2  world.search(you);' : 'SONG 1  world.execute(me);')]
   ];
   for (let i = 0; i < items.length; i++) {
     const sel = (i === SRC.sel), yy = y + 4 + i * 2;
@@ -3982,6 +4354,8 @@ function layoutUrlBox() {
    按钮用 HTML 画但颜色/字体与终端一致（border 用 currentColor → 跟随风格）
    --------------------------------------------------------------------------- */
 const padEl = document.getElementById('pad');
+const padToggleEl = document.getElementById('padToggle');
+let PAD_OPEN = true;                 // 侧栏默认展开，点把手折叠
 const padBtns = padEl ? Array.prototype.slice.call(padEl.querySelectorAll('button')) : [];
 const IS_TOUCH = (typeof navigator !== 'undefined') &&
   ((navigator.maxTouchPoints | 0) > 0 || (typeof window !== 'undefined' && 'ontouchstart' in window));
@@ -3990,7 +4364,12 @@ function padShow(act, on) {
 }
 function padSync() {
   if (!padEl) return;
-  padEl.className = IS_TOUCH ? 'on' : '';
+  padEl.className = IS_TOUCH ? (PAD_OPEN ? 'on' : 'on collapsed') : '';
+  if (padToggleEl) {
+    padToggleEl.className = IS_TOUCH ? (PAD_OPEN ? 'on open' : 'on') : '';
+    padToggleEl.textContent = PAD_OPEN ? '›' : '‹';
+    padToggleEl.style.color = CONFIG.colors.bright || '#ffffff';
+  }
   if (!IS_TOUCH) return;
   padEl.style.color = CONFIG.colors.bright || '#ffffff';
   const st = STAGE;
@@ -4033,6 +4412,11 @@ for (let i = 0; i < padBtns.length; i++) {
   const act = padBtns[i].getAttribute('data-act');
   padBtns[i].addEventListener('click', function (ev) { ev.preventDefault(); padAct(act); });
 }
+if (padToggleEl) padToggleEl.addEventListener('click', function (ev) {
+  ev.preventDefault();
+  PAD_OPEN = !PAD_OPEN;                 // 折叠/展开侧栏
+  padSync();
+});
 
 /* ---- 音频事件 ---- */
 // 音源状态回执：让"导入成功没有"这件事在界面上看得见
@@ -4065,7 +4449,879 @@ audioEl.addEventListener('error', function () {
   }
   loadSource(AUDIO.idx + 1);
 });
-audioEl.addEventListener('ended', function () { if (STAGE === 'MV') enterStage('END'); });
+audioEl.addEventListener('ended', function () {
+  if (STAGE !== 'MV') return;
+  // 第一首结束 → Y/N 关机确认；第二首结束 → 直接收尾
+  enterStage(SONGS.current === 'search' ? 'END' : 'SHUTDOWN');
+});
+
+/* world.search(you); 歌词表：sec 是 LRC 原始秒数，运行时按 music2 的真实时长归一化 */
+const LYRICS_SEARCH = [
+  { sec: 14.36, en: "Side by side, the lovelier goes up", cn: "两者并排比较，选可爱的就好" },
+  { sec: 21.18, en: "Reach for the top, till the bubble pops", cn: "以最佳为目标，直到气泡破掉" },
+  { sec: 28.05, en: "Take a memory, insert to the past", cn: "选择一段记忆，插入过去读取" },
+  { sec: 35.05, en: "Which one is the sweetest? Save it for the last", cn: "哪一段最甜蜜？留到最后细品" },
+  { sec: 40.90, en: "If you turn into a table", cn: "如果你变成了一张桌子" },
+  { sec: 44.14, en: "You must be at the height of my elbows", cn: "你一定刚好到我的手肘" },
+  { sec: 47.71, en: "Odd stubby leg makes you wobbly", cn: "有一条腿粗短变形，让你晃晃悠悠" },
+  { sec: 51.00, en: "You're the only perfect table for me", cn: "对我来说，你就是唯一一张完美的桌子" },
+  { sec: 54.46, en: "If you turn into an eggplant", cn: "如果你变成了一根茄子" },
+  { sec: 57.83, en: "You'll be my purple friend", cn: "那你就是我紫色的朋友" },
+  { sec: 61.22, en: "Scratchy nail marks on your body", cn: "你的身体因指甲的刮痕而阵阵刺痛" },
+  { sec: 64.66, en: "You're the only perfect eggplant for me", cn: "对我来说，你就是唯一一根完美的茄子" },
+  { sec: 68.17, en: "I'm searching", cn: "我在寻找" },
+  { sec: 82.89, en: "If you're a cat", cn: "如果你是一只猫" },
+  { sec: 85.49, en: "A little kitten", cn: "一只小猫咪" },
+  { sec: 87.46, en: "You must be blue point", cn: "那你一定是只蓝点暹罗" },
+  { sec: 89.76, en: "Meowing a lot", cn: "经常喵喵喵" },
+  { sec: 92.58, en: "Hissing a lot", cn: "经常嘶嘶嘶" },
+  { sec: 94.39, en: "But you never purr", cn: "但你从不咕噜咕噜" },
+  { sec: 96.64, en: "If you're a steak", cn: "如果你是一块排" },
+  { sec: 99.50, en: "A fillet mignon covered in mushroom sauce", cn: "一块菲力牛排，蘸满了蘑菇汁" },
+  { sec: 103.75, en: "Browned on the outside", cn: "表面是焦茶色" },
+  { sec: 106.66, en: "Medium-rare inside", cn: "里面是三分熟" },
+  { sec: 109.72, en: "If you turn into a flower", cn: "如果你变成了一朵花" },
+  { sec: 113.15, en: "You must be the most delicate ever", cn: "你一定是最娇嫩的那朵" },
+  { sec: 116.60, en: "Even if you bloom just occasionally", cn: "即使你只是偶尔绽放" },
+  { sec: 119.96, en: "You're the only perfect flower for me", cn: "对我来说，你仍是唯一一朵完美的花" },
+  { sec: 123.44, en: "If you turn into a human", cn: "如果你变成了一个人" },
+  { sec: 126.82, en: "I'd like all the warmth coming from your hands", cn: "我真想独占你掌中的温暖" },
+  { sec: 130.24, en: "Bit of stinky breath, with hair that's unruly", cn: "有一点点口臭，头发油腻" },
+  { sec: 133.65, en: "You're the only perfect human for me", cn: "对我来说，你仍是唯一一个完美的人" },
+  { sec: 137.09, en: "I'm searching", cn: "我在寻找" },
+  { sec: 151.84, en: "If you're a piece", cn: "如果你是一坨" },
+  { sec: 154.79, en: "A piece of sheet", cn: "一坨便便" },
+  { sec: 156.42, en: "You must be… U-Um?", cn: "你一定是…… 咦？是，是怎么" },
+  { sec: 158.85, en: "What,what's it called?", cn: "是怎么说的来着？" },
+  { sec: 161.64, en: "What's that word again?", cn: "是怎么说的来着？" },
+  { sec: 163.66, en: "\"Do-o-o-o-ope\"?", cn: "“好——呜——呜——呜——棒”？" },
+  { sec: 165.73, en: "If you could stay", cn: "如果你可以" },
+  { sec: 168.60, en: "Stay there where you are", cn: "可以保持不变" },
+  { sec: 170.43, en: "So I can… U-Um?", cn: "我就可以…… 咦？是，是怎么" },
+  { sec: 172.28, en: "Oh,what,what's it called?", cn: "噢，是怎么说的来着？" },
+  { sec: 175.43, en: "What's that word again?", cn: "是怎么说的来着？" },
+  { sec: 177.35, en: "\"Lo-o-o-ove\"?", cn: "“啊—啊—哎—爱”？" },
+  { sec: 179.47, en: "I'm searching for", cn: "我在寻找" },
+  { sec: 180.97, en: "Searching for you everywhere", cn: "到处将你寻找" },
+  { sec: 182.65, en: "I can see you in most everything", cn: "在我眼里处处都有你的身影" },
+  { sec: 186.43, en: "I'm searching for", cn: "我在寻找" },
+  { sec: 187.76, en: "Searching for you everywhere", cn: "到处将你寻找" },
+  { sec: 189.37, en: "But somehow you can't stop transforming", cn: "但你不知怎的总是变个不停" },
+  { sec: 193.28, en: "I'm searching for, searching for, searching for", cn: "我在寻找，我在寻找，我在寻找" },
+  { sec: 196.32, en: "Searching for, searching for, searching for", cn: "我在寻找，我在寻找，我在寻找" },
+  { sec: 198.93, en: "A-Ah", cn: "哎呀" },
+  { sec: 200.25, en: "I'm searching for, searching for, searching for", cn: "我在寻找，我在寻找，我在寻找" },
+  { sec: 203.16, en: "My old self that's gone since you have left", cn: "寻找那个在你消失后随之消失的自己" },
+  { sec: 207.14, en: "Each one of us has a bucket of love", cn: "我们每个人都是爱情的容器" },
+  { sec: 214.35, en: "Some of us empty, some of us filled up", cn: "有的空空如也，有的满满欲溢" },
+  { sec: 221.18, en: "Cut this into pieces, break us down to the cell", cn: "将我们切成一块一块，分解得如细胞般微小" },
+  { sec: 228.16, en: "Merge us back up, we have evolved now", cn: "再将我们重新融为一体，我们就此进化" },
+  { sec: 233.77, en: "If you turn into a flower", cn: "如果你变成了一朵花" },
+  { sec: 237.09, en: "You must be the most delicate ever", cn: "你一定是最娇嫩的那朵" },
+  { sec: 240.48, en: "Even if you bloom just occasionally", cn: "即使你只是偶尔绽放" },
+  { sec: 243.94, en: "You're the only perfect flower for me", cn: "对我来说，你仍是唯一一朵完美的花" },
+  { sec: 247.37, en: "If you turn into a human", cn: "如果你变成了一个人" },
+  { sec: 250.78, en: "I like hug the warmth come from your hands", cn: "我想抱住你掌中的温暖" },
+  { sec: 254.22, en: "Bit of stinky breath with hair that is unruly", cn: "有一点点口臭，头发油腻" },
+  { sec: 257.56, en: "You're the only perfect human for me", cn: "对我来说，你仍是唯一一个完美的人" },
+  { sec: 261.06, en: "I'm searching", cn: "我在寻找" },
+  { sec: 275.75, en: "If you're a dog", cn: "如果你是一只狗" },
+  { sec: 278.68, en: "A little puppy", cn: "一只小狗崽" },
+  { sec: 280.55, en: "Going ruff ruff ruff", cn: "一直汪汪汪" },
+  { sec: 282.73, en: "If you're a fruit", cn: "如果你是一颗水果" },
+  { sec: 285.58, en: "A tomato", cn: "一颗番茄" },
+  { sec: 287.35, en: "Full of juice", cn: "饱满多汁" }
+];
+
+
+/* ===========================================================================
+   [17] 第二首：world.search(you);  —— 米黄 / 柔和现代显示
+   与第一首完全相反的视觉：没有扫描线、没有 RGB 分离、没有锐化，
+   改成柔光模糊 + 胶片颗粒 + 暖色暗角。整首歌是"一次搜索的连续演变"。
+   =========================================================================== */
+
+// SONGS 已在前面声明（getL 之前），这里不再重复
+const REMOTE_AUDIO2 = 'https://ycbasr-d5gvv7az2cb986021-1316612369.tcloudbaseapp.com/music2.flac';
+const SONG2_CANDIDATES = [REMOTE_AUDIO2, 'music2.mp3', 'music2.flac', 'music2.ogg', 'music2.wav', 'music2.m4a'];
+const SONG1_CANDIDATES = AUDIO_DEFAULT_CANDIDATES.slice();
+
+function songCandidates(song) { return song === 'search' ? SONG2_CANDIDATES : SONG1_CANDIDATES; }
+
+/* ---------- 第二首的场景边界：直接从歌词里找关键句（比硬编码百分比稳） ---------- */
+let SEARCH_SCENES = { intro: 0, morph1: 1, morph2: 1, chorus: 1, bridge: 1, outro: 1 };
+function searchKeyTime(re) {
+  for (let i = 0; i < CONFIG.lyrics.length; i++) if (re.test(CONFIG.lyrics[i].en)) return CONFIG.lyrics[i].t;
+  return 1;
+}
+function buildLyricsSearch(d) {
+  CONFIG.lyrics = LYRICS_SEARCH.map(function (l) {
+    return { t: clamp(l.sec / d, 0, 1), sec: l.sec, en: l.en, cn: l.cn };
+  });
+  MOTIF_BY_INDEX = CONFIG.lyrics.map(function (l) { return searchMotifFor(l); });
+  for (let i = MOTIF_BY_INDEX.length - 2; i >= 0; i--) {
+    if (!MOTIF_BY_INDEX[i]) MOTIF_BY_INDEX[i] = MOTIF_BY_INDEX[i + 1];   // 桥句继承下一句
+  }
+  GRIEF_IDX = -1; LEAVE_OCC = [];
+  SEARCH_SCENES = {
+    intro: 0,
+    morph1: searchKeyTime(/turn into a table/i),
+    morph2: searchKeyTime(/if you're a cat/i),
+    chorus: searchKeyTime(/^i'm searching for$/i),
+    bridge: searchKeyTime(/bucket of love/i),
+    outro: searchKeyTime(/if you're a dog/i)
+  };
+}
+
+/* ---------- 开场散落的预设碎片 ---------- */
+const INTRO_BLOCKS = [
+  { fx: 0.04, fy: 0.06, at: 1.0, lines: ['preset = {', '  target : "you",', '  scope  : ALL_FORMS', '}'] },
+  { fx: 0.04, fy: 0.52, at: 2.6, lines: ['forms = [ TABLE,', '  EGGPLANT, CAT,', '  STEAK, FLOWER,', '  HUMAN, DOG,', '  TOMATO, PIECE ]'] },
+  { fx: 0.56, fy: 0.05, at: 4.0, lines: ['filter = {', '  warmth  > 0.80,', '  purr    == false,', '  wobble  == true', '}'] },
+  { fx: 0.60, fy: 0.46, at: 5.6, lines: ['match   : PERFECT_ONLY', 'fallback: null', 'retry   : Infinity'] },
+  { fx: 0.34, fy: 0.74, at: 7.4, lines: ['search(world, you)', '  -> indexing ...'] },
+  { fx: 0.06, fy: 0.30, at: 9.0, lines: ['// no form fits', '// keep looking'] }
+];
+
+/* ---------- 搜索结果信息（点开缩略图时弹窗显示） ---------- */
+const FORM_INFO = {
+  table:    ['TABLE',          'leg count 4 -> 3, odd stubby leg detected'],
+  eggplant: ['EGGPLANT',       'scratchy nail marks on body'],
+  cat:      ['CAT / KITTEN',   'blue-point, meows a lot, never purrs'],
+  steak:    ['FILLET MIGNON',  'browned outside, medium-rare inside'],
+  flower:   ['FLOWER',         'blooms just occasionally'],
+  human:    ['HUMAN',          'warm hands, bit of stinky breath'],
+  dog:      ['LITTLE PUPPY',   'going ruff ruff ruff'],
+  tomato:   ['TOMATO',         'full of juice'],
+  poop:     ['PIECE OF SHEET', 'rejected — not a perfect form'],
+  piece:    ['PIECE',          'name not recalled'],
+  bucket:   ['BUCKET OF LOVE', 'some empty, some filled up'],
+  shatter:  ['CELL',           'cut into pieces, broken down'],
+  merge:    ['EVOLVED',        'merged back up, we have evolved'],
+  grid:     ['SEARCH INDEX',   'scanning all forms'],
+  fade:     ['OLD SELF',       'gone since you have left'],
+  code:     ['QUERY',          'search(world, you)']
+};
+/* 可点击命中点：预分配池，逐帧只改内容不新建对象（热路径零分配） */
+const SEARCH_HITS = [];
+for (let i = 0; i < 24; i++) SEARCH_HITS.push({ x: 0, y: 0, form: 'human', live: false });
+let SEARCH_HIT_N = 0;
+const SEARCH_POP = { open: false, form: 'human', match: 0, t0: 0, idx: 0 };
+
+/* ---------- 搜索形态：一张极简轮廓表 ---------- */
+const SEARCH_FORMS = [
+  [/perfect table/i, 'table'], [/turn into a table/i, 'table'], [/elbows|wobbly/i, 'table'],
+  [/perfect eggplant/i, 'eggplant'], [/turn into an eggplant/i, 'eggplant'], [/purple friend|scratchy nail/i, 'eggplant'],
+  [/never purr|meowing|hissing|blue point|little kitten/i, 'cat'], [/if you're a cat/i, 'cat'],
+  [/fillet|browned|medium-rare/i, 'steak'], [/if you're a steak/i, 'steak'],
+  [/perfect flower/i, 'flower'], [/turn into a flower/i, 'flower'], [/most delicate|bloom just/i, 'flower'],
+  [/perfect human/i, 'human'], [/turn into a human/i, 'human'], [/warmth|stinky breath/i, 'human'],
+  [/ruff|little puppy/i, 'dog'], [/if you're a dog/i, 'dog'],
+  [/a tomato|full of juice/i, 'tomato'], [/if you're a fruit/i, 'tomato'],
+  [/piece of sheet/i, 'poop'], [/if you're a piece/i, 'poop'],
+  [/it called|that word|u-um|do-o|lo-o/i, 'piece'],
+  [/bucket of love|filled up|some of us/i, 'bucket'],
+  [/cut this into pieces|break us down/i, 'shatter'],
+  [/merge us back up|evolved/i, 'merge'],
+  [/side by side|reach for the top|take a memory|sweetest/i, 'code'],
+  [/i'm searching|searching for/i, 'grid'],
+  [/old self/i, 'fade']
+];
+const RING_LINE = /you're the only perfect/i;
+function searchMotifFor(line) {
+  if (!line || !line.en) return null;
+  for (let i = 0; i < SEARCH_FORMS.length; i++) {
+    if (SEARCH_FORMS[i][0].test(line.en)) {
+      return { form: SEARCH_FORMS[i][1], ring: RING_LINE.test(line.en), code: searchCodeFor(SEARCH_FORMS[i][1]) };
+    }
+  }
+  return null;
+}
+function searchCodeFor(form) {
+  const M = {
+    table: 'search(you, { form: TABLE })', eggplant: 'search(you, { form: EGGPLANT })',
+    cat: 'search(you, { form: CAT })', steak: 'search(you, { form: STEAK })',
+    flower: 'search(you, { form: FLOWER })', human: 'search(you, { form: HUMAN })',
+    dog: 'search(you, { form: DOG })', tomato: 'search(you, { form: TOMATO })',
+    piece: 'search(you, { form: PIECE })', poop: 'search(you, { form: PIECE /* sheet */ })', bucket: 'search(you, { form: BUCKET })',
+    shatter: 'partition(us, CELL)', merge: 'merge(us).evolve()',
+    grid: 'for (form of all) match(you)', code: 'search(world, you)', fade: 'result = null'
+  };
+  return M[form] || 'search(world, you)';
+}
+
+/* ---------- 极简轮廓绘制 ---------- */
+function sEllipse(frame, cx, cy, rx, ry, ch, col, glow, k) {
+  const n = Math.max(24, Math.round((rx + ry) * 3));
+  for (let i = 0; i < n * clamp(k === undefined ? 1 : k, 0, 1); i++) {
+    const th = (i / n) * Math.PI * 2;
+    frame.set(Math.round(cx + Math.cos(th) * rx), Math.round(cy + Math.sin(th) * ry * 0.55), ch, col, glow);
+  }
+}
+function drawForm(frame, form, cx, cy, S, col, dim, k) {
+  const g = k === undefined ? 1 : clamp(k, 0, 1);
+  if (g <= 0.01) return;
+  switch (form) {
+    case 'table': {
+      // 四条腿的桌子；唱到 "Odd stubby leg" 时右前腿变短、桌面往那边沉 —— 晃晃悠悠
+      const wob = /odd stubby|wobbly/i.test(VIS.line ? VIS.line.en : '') ? 1 : 0;
+      const w = Math.round(S * 0.95 * g);
+      const topY = cy - Math.round(S * 0.34);
+      const tilt = Math.round(wob * 3.2);                       // 桌面右端下沉
+      const legs = [-w + 2, -w + 5, w - 5, w - 2];              // 前后各两条，拉开了画
+      for (let i = -w; i <= w; i++) {                           // 桌面（带倾斜）
+        const ty = topY + Math.round(((i + w) / (2 * w)) * tilt);
+        frame.set(cx + i, ty, '=', col, true);
+      }
+      for (let k = 0; k < legs.length; k++) {                   // 四条腿一直落到地面 cy
+        const lx = cx + legs[k];
+        const ly0 = topY + Math.round(((legs[k] + w) / (2 * w)) * tilt);
+        const stubby = (wob && k === 3);                        // 右前腿：粗短
+        const len = stubby ? Math.round(S * 0.16) : (cy - ly0);
+        for (let j = 0; j <= len; j++) frame.set(lx, ly0 + j, stubby ? '#' : '|', k < 2 ? col : dim, k < 2);
+        if (stubby) { frame.set(lx - 1, ly0 + len, '#', col); frame.set(lx + 1, ly0 + len, '#', col); }
+      }
+      for (let i = -w; i <= w; i++) frame.set(cx + i, cy, '-', dim);   // 地面
+      if (wob) frame.text(cx + w - 6, cy + 2, 'wobble!', col, true);
+      break;
+    }
+    case 'eggplant': {
+      sEllipse(frame, cx, cy + 2, S * 0.42 * g, S * 1.05 * g, 'o', col, true, g);
+      // "Scratchy nail marks on your body"：身上三道指甲刮痕 + 几点破皮
+      const scratch = /scratchy/i.test(VIS.line ? VIS.line.en : '');
+      if (scratch || g > 0.9) {
+        const sc = scratch ? col : dim;
+        const gl2 = scratch && ((FX.t * 6) % 1 < 0.5);
+        for (let k = 0; k < 3; k++) {
+          const sx = cx - 3 + k * 3, sy = cy - 2 + Math.round(S * 0.2);
+          for (let j = 0; j < 5; j++) frame.set(sx + (j % 2 ? 1 : 0), sy + j, '/', sc, gl2);
+          frame.set(sx + 1, sy + 6, '\\', sc, gl2);
+        }
+        if (scratch) frame.text(cx + 5, cy + Math.round(S * 0.35), '//', col, true);
+      }
+      frame.set(cx - 1, cy - Math.round(S * 0.85 * g), '\\', col);
+      frame.set(cx, cy - Math.round(S * 0.95 * g), '^', col, true);
+      frame.set(cx + 1, cy - Math.round(S * 0.9 * g), '/', col);
+      break;
+    }
+    case 'cat': {
+      const r = Math.round(S * 0.55 * g);
+      sEllipse(frame, cx, cy + 1, r, r, 'o', col, true, g);
+      frame.text(cx - r + 2, cy - r, '/\\', col);
+      frame.text(cx + r - 3, cy - r, '/\\', col);
+      frame.set(cx - Math.round(r * 0.45), cy, 'o', col, true);
+      frame.set(cx + Math.round(r * 0.45), cy, 'o', col, true);
+      frame.text(cx - 1, cy + 2, 'w', dim);
+      for (let i = 1; i <= 3; i++) { frame.set(cx - r - i, cy + 1 + (i % 2), '-', dim); frame.set(cx + r + i, cy + 1 + (i % 2), '-', dim); }
+      break;
+    }
+    case 'steak': {
+      sEllipse(frame, cx, cy + 1, S * 0.72 * g, S * 0.5 * g, '#', col, true, g);
+      for (let i = -2; i <= 2; i++) frame.set(cx + i * 3, cy + (i % 2 ? 1 : -1), '~', dim);
+      break;
+    }
+    case 'flower': {
+      // 一朵认得出的花：8 片花瓣张开 + 花心 + 花茎 + 两片叶子
+      const head = cy - Math.round(S * 0.32);
+      const r = Math.round(S * 0.52);
+      const open = 0.42 + g * 0.58;                      // 花瓣缓慢张开
+      for (let p = 0; p < 8; p++) {
+        const a = (p / 8) * Math.PI * 2 - Math.PI / 2;
+        const rr = r * open;
+        frame.set(Math.round(cx + Math.cos(a) * rr), Math.round(head + Math.sin(a) * rr * 0.62), 'o', col, true);
+        frame.set(Math.round(cx + Math.cos(a) * rr * 0.55), Math.round(head + Math.sin(a) * rr * 0.34), '.', dim);
+        const a2 = a + 0.39;
+        frame.set(Math.round(cx + Math.cos(a2) * rr * 0.86), Math.round(head + Math.sin(a2) * rr * 0.53), '*', col);
+      }
+      frame.text(cx - 1, head, '@@', col, true);          // 花心
+      const stem = Math.round(S * 0.78 * g);
+      for (let j = 0; j <= stem; j++) frame.set(cx, head + Math.round(S * 0.3) + j, '|', dim);
+      frame.text(cx - 5, head + Math.round(S * 0.52), '\\_', col);   // 左叶
+      frame.text(cx + 2, head + Math.round(S * 0.72), '_/', col);      // 右叶
+      break;
+    }
+    case 'human': {
+      const r = Math.round(S * 0.3 * g);
+      sEllipse(frame, cx, cy - r, r, r * 0.8, 'o', col, true, g);
+      for (let i = -r * 2; i <= r * 2; i++) {
+        const y = cy + r * 0.6 + Math.round(Math.abs(i) * 0.25);
+        if (Math.abs(i) <= r * 2 * g) frame.set(cx + i, y, '=', col, true);
+      }
+      for (let j = 0; j < r * 2; j++) for (const sx of [-r * 2, r * 2]) {
+        if (Math.abs(j) < r * 2 * g) frame.set(cx + sx, cy + r * 0.8 + j, '|', dim);
+      }
+      break;
+    }
+    case 'dog': {
+      const r = Math.round(S * 0.5 * g);
+      sEllipse(frame, cx, cy, r, r * 0.9, 'o', col, true, g);
+      frame.set(cx - r, cy - r + 1, '/', col); frame.set(cx + r, cy - r + 1, '\\', col);
+      frame.set(cx - Math.round(r * 0.5), cy - 1, 'o', col);
+      frame.set(cx + Math.round(r * 0.5), cy - 1, 'o', col);
+      frame.text(cx - 1, cy + 2, 'w', col);
+      frame.set(cx - 1, cy + 3, 'U', dim);
+      break;
+    }
+    case 'tomato': {
+      sEllipse(frame, cx, cy + 1, S * 0.5 * g, S * 0.5 * g, 'o', col, true, g);
+      frame.text(cx - 2, cy - Math.round(S * 0.5 * g) - 1, '\\|/', col);
+      break;
+    }
+    case 'poop': {
+      // "A piece of sheet" 的谐音梗：就是一坨，旁边飘两缕臭气
+      const w = Math.round(S * 0.5 * g);
+      const base = cy + Math.round(S * 0.34);
+      for (let i = -w; i <= w; i++) frame.set(cx + i, base, '~', col, true);
+      sEllipse(frame, cx, base - 3, Math.round(w * 1.7), Math.round(w * 0.9), 'o', col, false, g);
+      sEllipse(frame, cx, base - 7, Math.round(w * 1.15), Math.round(w * 0.75), '@', col, true, g);
+      frame.set(cx, base - 11, '^', col, true);
+      for (let k = 0; k < 3; k++) {                       // 臭气
+        const sx = cx + (k - 1) * 4;
+        frame.set(sx, base - 14, '~', dim);
+        frame.set(sx + 1, base - 16, '~', dim);
+        frame.set(sx, base - 18, '~', dim);
+      }
+      break;
+    }
+    case 'piece': {
+      const w = Math.round(S * 0.6 * g), h = Math.round(S * 0.4 * g);
+      for (let i = -w; i <= w; i++) { frame.set(cx + i, cy - h, '~', col); frame.set(cx + i, cy + h, '~', col); }
+      for (let j = -h; j <= h; j++) { frame.set(cx - w, cy + j, '(', dim); frame.set(cx + w, cy + j, ')', dim); }
+      frame.text(cx - 1, cy, '?', col, true);
+      break;
+    }
+    case 'bucket': {
+      const w = Math.round(S * 0.45 * g);
+      for (let i = -w; i <= w; i++) frame.set(cx + i, cy - w, '-', col, true);
+      for (let j = 0; j < w * 1.6; j++) {
+        frame.set(cx - w + Math.round(j * 0.12), cy - w + Math.round(j), '\\', dim);
+        frame.set(cx + w - Math.round(j * 0.12), cy - w + Math.round(j), '/', dim);
+      }
+      for (let i = -w + 2; i <= w - 2; i += 2) frame.set(cx + i, cy - w + 2, 'v', col);
+      break;
+    }
+    case 'shatter': {
+      for (let i = 0; i < 26; i++) {
+        const h1 = hash11(i * 3.1), h2 = hash11(i * 5.7);
+        frame.set(Math.round(cx + (h1 * 2 - 1) * S * (0.4 + g)), Math.round(cy + (h2 * 2 - 1) * S * 0.5 * (0.4 + g)), '#', col);
+      }
+      break;
+    }
+    case 'merge': {
+      for (let i = 0; i < 30; i++) {
+        const h1 = hash11(i * 2.3), h2 = hash11(i * 4.9);
+        frame.set(Math.round(cx + (h1 * 2 - 1) * S * (1.4 - g)), Math.round(cy + (h2 * 2 - 1) * S * 0.7 * (1.4 - g)), '+', col);
+      }
+      sEllipse(frame, cx, cy, S * 0.5 * g, S * 0.5 * g, '.', dim, false, g);
+      break;
+    }
+    case 'grid': {
+      const w = Math.round(S * 1.5);
+      for (let i = -w; i <= w; i += 3) for (let j = -Math.round(w * 0.5); j <= w * 0.5; j += 2) {
+        frame.set(cx + i, cy + j, '+', dim);
+      }
+      break;
+    }
+    case 'fade': {
+      sEllipse(frame, cx, cy, S * 0.6 * g, S * 0.7 * g, '.', dim, false, g);
+      break;
+    }
+    default: {
+      frame.text(cx - 1, cy, '?', col, true);
+      break;
+    }
+  }
+}
+/* 涟漪：从中心扩散的一圈，用于"如果你变成 X" */
+function drawRipple(frame, cx, cy, r, col, dim) {
+  const n = Math.max(20, Math.round(r * 4));
+  for (let i = 0; i < n; i++) {
+    const th = (i / n) * Math.PI * 2;
+    frame.set(Math.round(cx + Math.cos(th) * r), Math.round(cy + Math.sin(th) * r * 0.55), '.', dim);
+  }
+  for (let i = 0; i < n / 2; i++) {
+    const th = (i / (n / 2)) * Math.PI * 2;
+    frame.set(Math.round(cx + Math.cos(th) * r * 0.72), Math.round(cy + Math.sin(th) * r * 0.4), '-', dim);
+  }
+}
+/* 珊瑚橘光圈：心跳节奏脉动 */
+function drawRing(frame, cx, cy, r, col) {
+  const n = Math.max(28, Math.round(r * 5));
+  for (let i = 0; i < n; i++) {
+    const th = (i / n) * Math.PI * 2;
+    frame.set(Math.round(cx + Math.cos(th) * r), Math.round(cy + Math.sin(th) * r * 0.58), '@', col, true);
+  }
+}
+
+/* ---------- 六个场景 ---------- */
+function searchArea() {
+  const L = getL();
+  const cx = Math.round((L.cx0 + L.cx1) / 2);
+  const cy = Math.round((L.mainTop + L.mainBot) / 2);
+  const S = Math.min((L.cx1 - L.cx0) * 0.16, (L.mainBot - L.mainTop) * 0.42);
+  return { L: L, cx: cx, cy: cy, S: S };
+}
+/* 搜索网格底纹：越到后面越密 */
+function searchGridBg(frame, dens, col) {
+  const L = getL();
+  for (let y = L.mainTop; y <= L.mainBot; y += 3) {
+    for (let x = L.cx0; x <= L.cx1; x += 4) {
+      if (hash11(x * 0.7 + y * 1.3) < dens) frame.set(x, y, '+', col);
+    }
+  }
+}
+function scene_search_intro(t, u) {
+  const frame = FRAME;      // 六个场景都从这里取帧缓冲
+  const A = searchArea(), L = A.L, C = COL();
+  const blink = (performance.now() % 1200) < 600;
+  // —— 左侧：预览窗口 + 待输入光标
+  const lx = L.cx0 + Math.round((L.cx1 - L.cx0) * 0.16);
+  const ly = A.cy;
+  frame.centerText(ly - 6, 'S E A R C H', C.dark);
+  frame.text(lx - 2, ly, blink ? '_' : ' ', C.mid, true);
+  frame.text(lx - 8, ly + 3, 'idle', C.deep);
+  // —— 多个预设碎片散落在整个画面上，各自按时间开始打字，并缓慢浮动
+  const BLOCKS = INTRO_BLOCKS;
+  const spanX = L.cx1 - L.cx0, spanY = L.mainBot - L.mainTop;
+  for (let b = 0; b < BLOCKS.length; b++) {
+    const B = BLOCKS[b];
+    const bx = L.cx0 + 2 + Math.round(B.fx * (spanX - 30));
+    const by = L.mainTop + 1 + Math.round(B.fy * (spanY - B.lines.length - 2)) +
+               Math.round(Math.sin(t * 0.5 + b) * 1.2);          // 缓慢浮动
+    const shown = (t - B.at) / 1.5;
+    if (shown < 0) continue;
+    for (let i = 0; i < B.lines.length; i++) {
+      if (i > shown) break;
+      const full = B.lines[i], cur = Math.floor(shown);
+      const part = (i === cur) ? Math.max(1, Math.round((shown - i) * full.length)) : full.length;
+      frame.text(bx, by + i, full.slice(0, part), i === 0 ? C.mid : C.dark);
+    }
+    if (shown > B.lines.length && ((FX.t * 3 + b) % 1) < 0.5) frame.set(bx + 1, by + B.lines.length, '_', C.deep);
+  }
+  if (u > 0.045) searchGridBg(frame, 0.05, C.deep);
+}
+function scene_search_morph1(t, u) {
+  const frame = FRAME;      // 六个场景都从这里取帧缓冲                        // 桌面/茄子：涟漪 + 浮现
+  const A = searchArea(), C = COL();
+  searchGridBg(frame, 0.05 + u * 0.05, C.deep);
+  const m = VIS.m;
+  if (m && m.form !== 'code') {
+    const grow = easeOut(clamp(VIS.p / 0.4, 0, 1));
+    drawRipple(frame, A.cx, A.cy, A.S * (0.6 + VIS.p * 2.4), C.dark, C.deep);
+    drawForm(frame, m.form, A.cx, A.cy, A.S, C.bright, C.dark, grow);
+    if (m.ring) drawRing(frame, A.cx, A.cy, A.S * (1.25 + Math.sin(FX.t * 3.4) * 0.12),
+      ((FX.t * 1.4) % 1) < 0.5 ? C.alert : C.mid);
+  } else {
+    frame.set(A.cx + 1, A.cy, ((performance.now() % 1200) < 600) ? '_' : ' ', C.mid, true);
+  }
+}
+function scene_search_morph2(t, u) {
+  const frame = FRAME;      // 六个场景都从这里取帧缓冲                        // 猫/牛排/花/人
+  const A = searchArea(), C = COL();
+  searchGridBg(frame, 0.10 + u * 0.06, C.deep);
+  const m = VIS.m;
+  if (m && m.form === 'cat') {                              // 猫叫的视觉化：边缘的 m / w
+    for (let i = 0; i < 60; i++) {
+      const h1 = hash11(i * 2.9 + Math.floor(FX.t * 3) * 0.13), h2 = hash11(i * 4.3);
+      if (h1 < 0.45) continue;
+      frame.set(Math.round(A.L.cx0 + h2 * (A.L.cx1 - A.L.cx0)), A.L.mainTop + Math.round(h1 * (A.L.mainBot - A.L.mainTop)),
+        i % 2 ? 'm' : 'w', C.mid);
+    }
+  }
+  if (m) {
+    const grow = easeOut(clamp(VIS.p / 0.4, 0, 1));
+    if (m.form === 'flower') {                              // 花瓣缓慢张开
+      drawForm(frame, 'flower', A.cx, A.cy, A.S, C.bright, C.dark, 0.35 + grow * 0.65);
+    } else {
+      drawRipple(frame, A.cx, A.cy, A.S * (0.7 + VIS.p * 2.2), C.dark, C.deep);
+      drawForm(frame, m.form, A.cx, A.cy, A.S, C.bright, C.dark, grow);
+    }
+    if (m.ring) drawRing(frame, A.cx, A.cy, A.S * (1.25 + Math.sin(FX.t * 3.4) * 0.12),
+      ((FX.t * 1.4) % 1) < 0.5 ? C.alert : C.mid);
+  }
+}
+function scene_search_chorus(t, u) {
+  const frame = FRAME;      // 六个场景都从这里取帧缓冲                        // 搜索风暴：网格 + 缩略图 + 漩涡
+  const A = searchArea(), L = A.L, C = COL();
+  searchGridBg(frame, 0.42, C.deep);
+  // —— 扫描带：自上而下扫过整个网格，扫到的格子当场点亮 —— 这才看得出"在搜"
+  const span = (L.mainBot - L.mainTop) + 8;
+  const scanY = L.mainTop + Math.round((t * 26) % span) - 4;
+  for (let y = Math.max(L.mainTop, scanY - 3); y <= Math.min(L.mainBot, scanY); y++) {
+    for (let x = L.cx0; x <= L.cx1; x++) {
+      if ((x + y) % 2 === 0) frame.set(x, y, '=', C.mid);
+      else frame.set(x, y, hash11(x * 1.7 + y * 2.3) > 0.45 ? '*' : '+', C.bright, true);
+    }
+  }
+  const hits = Math.floor(t * 3) % 900 + 40;
+  frame.centerText(L.mainBot - 1, 'MATCHING  ' + hits + ' / ' + (hits + 7) + '   ·   CLICK A RESULT TO INSPECT', C.dark);
+  const forms = ['table', 'eggplant', 'cat', 'flower', 'human', 'tomato', 'steak'];
+  const spin = Math.floor(FX.t * 9);                        // 台阶式旋转
+  const ang = spin * 0.06 + u * 2.2;
+  for (let i = 0; i < 18; i++) {
+    const h1 = hash11(i * 3.7), h2 = hash11(i * 5.1);
+    const rr = (0.25 + h1 * 0.95) * (L.cx1 - L.cx0) * 0.45;
+    const th = h2 * Math.PI * 2 + ang;
+    const px = Math.round(A.cx + Math.cos(th) * rr);
+    const py = Math.round(A.cy + Math.sin(th) * rr * 0.55);
+    const hot = hash11(i * 9.3 + spin * 0.37) > 0.68;
+    const f = forms[(i + Math.floor(u * 7)) % forms.length];
+    drawForm(frame, f, px, py, A.S * 0.3, hot ? C.alert : C.bright, C.dark, 1);
+    // 登记成可点目标（点一下浮出结果弹窗）
+    if (SEARCH_HIT_N < SEARCH_HITS.length) {
+      const H = SEARCH_HITS[SEARCH_HIT_N++];
+      H.x = px; H.y = py; H.form = f; H.live = true;
+    } else { /* 池满则忽略 */ }
+  }
+  if (/can't stop transforming/i.test(VIS.line ? VIS.line.en : '')) {
+    for (let i = 0; i < 8; i++) {                            // 形态不稳定：闪烁叠影
+      const px = A.cx + Math.round((hash11(i * 1.9 + Math.floor(FX.t * 14) * 0.11) * 2 - 1) * (L.cx1 - L.cx0) * 0.4);
+      const py = A.cy + Math.round((hash11(i * 3.3) * 2 - 1) * 14);
+      drawForm(frame, forms[i % forms.length], px, py, A.S * 0.34, C.mid, C.deep, 1);
+    }
+  }
+}
+function scene_search_bridge(t, u) {
+  const frame = FRAME;      // 六个场景都从这里取帧缓冲                        // 拆解与重组
+  const A = searchArea(), L = A.L, C = COL();
+  const cells = [];
+  for (let y = L.mainTop; y <= L.mainBot; y += 2) {
+    for (let x = L.cx0 + 2; x <= L.cx1 - 2; x += 3) {
+      const h = hash11(x * 1.1 + y * 2.7);
+      if (h < 0.34) continue;
+      const pull = (u < 0.5) ? (0.35 + u) : (1.35 - u);     // 先散开再收拢
+      const px = Math.round(A.cx + (x - A.cx) * pull);
+      const py = Math.round(A.cy + (y - A.cy) * pull);
+      frame.set(px, py, h > 0.72 ? '#' : (h > 0.5 ? '*' : '+'), h > 0.72 ? C.bright : C.mid, h > 0.72);
+    }
+  }
+  if (u > 0.62) drawForm(frame, 'human', A.cx, A.cy, A.S * (0.5 + (u - 0.62) * 1.2), C.bright, C.dark, (u - 0.62) / 0.38);
+}
+function scene_search_outro(t, u) {
+  const frame = FRAME;      // 六个场景都从这里取帧缓冲                         // 找到：人形轮廓 + 最后只剩标题
+  const A = searchArea(), L = A.L, C = COL();
+  const last = CONFIG.lyrics.length ? CONFIG.lyrics[CONFIG.lyrics.length - 1] : null;
+  const done = last && t > (last.sec + 4.5);
+  if (done) {
+    // 结尾：歌名与乐队名从暗到亮慢慢浮现（约 3 秒），再留下闪烁光标
+    const blink = (performance.now() % 1200) < 600;
+    const k = clamp((t - (last.sec + 4.5)) / 3.0, 0, 1);
+    const mix = function (h2, lo) { return mixRGB(hexToRgb(C.black), hexToRgb(h2), (lo || 0) + k * (1 - (lo || 0))); };
+    frame.centerText(A.cy - 3, 'world.search(you);', mix(C.pure, 0.15), k > 0.35);
+    if (k > 0.35) {
+      const k2 = clamp((k - 0.35) / 0.65, 0, 1);
+      frame.centerText(A.cy + 2, 'M  I  L  I', mixRGB(hexToRgb(C.black), hexToRgb(C.bright), k2), k2 > 0.5);
+      if (k2 > 0.4) frame.centerText(A.cy + 5, 'world.search(you);  ·  Miracle Milk', mixRGB(hexToRgb(C.black), hexToRgb(C.dark), (k2 - 0.4) / 0.6));
+    }
+    frame.set(A.cx + 10, A.cy - 3, blink ? '_' : ' ', mix(C.pure, 0.4), true);
+    return;
+  }
+  searchGridBg(frame, 0.10, C.deep);
+  const m = VIS.m;
+  const grow = easeOut(clamp((u - 0.06) / 0.5, 0, 1));
+  const silh = (m && m.form === 'human') ? 1 : (u > 0.5 ? 0.9 : 0.6);
+  drawForm(frame, 'human', A.cx, A.cy, A.S * 1.15, C.pure, C.dark, grow * silh);
+  for (let i = 0; i < 40; i++) {                            // 柔和光晕
+    const th = (i / 40) * Math.PI * 2;
+    const r = A.S * (1.6 + Math.sin(FX.t * 1.7 + i * 0.4) * 0.08);
+    frame.set(Math.round(A.cx + Math.cos(th) * r), Math.round(A.cy + Math.sin(th) * r * 0.6), '.', i % 3 ? C.dark : C.alert);
+  }
+  if (m && m.form !== 'human' && m.form !== 'fade') drawForm(frame, m.form, A.cx, A.cy + Math.round(A.S * 0.9), A.S * 0.4, C.mid, C.dark, grow);
+}
+/* 第二首的统一入口：按时间选场景 */
+function searchSceneAt(t) {
+  const total = AUDIO.duration || 1;
+  const n = t / total;
+  if (n < SEARCH_SCENES.morph1) return 1;
+  if (n < SEARCH_SCENES.morph2) return 2;
+  if (n < SEARCH_SCENES.chorus) return 3;
+  if (n < SEARCH_SCENES.bridge) return 4;
+  if (n < SEARCH_SCENES.outro) return 5;
+  return 6;
+}
+function renderSearchContent(f, si, t, u) {
+  const L = getL(), C = COL();
+  f.clear();                     // ← 关键：第二首原来漏了清帧，逐帧叠加会糊成一团
+  if (si === 1) scene_search_intro(t, u);
+  else if (si === 2) scene_search_morph1(t, u);
+  else if (si === 3) scene_search_morph2(t, u);
+  else if (si === 4) scene_search_chorus(t, u);
+  else if (si === 5) scene_search_bridge(t, u);
+  else scene_search_outro(t, u);
+  // 顶部极简标题行
+  f.text(2, L.hdr, 'world.search(you);', C.dark, false);
+  f.rightText(L.C - 3, L.hdr, fmtTime(Math.max(0, t)) + '  /  ' + fmtTime(AUDIO.duration), C.deep);
+  drawLyricsSearch(f, t);
+}
+
+function searchBlendInfo(t) {
+  const total = (AUDIO.duration && isFinite(AUDIO.duration) && AUDIO.duration > 0) ? AUDIO.duration : 1;
+  const W = Math.min(0.02, 2.2 / total);
+  const n = clamp(t / total, 0, 1);
+  const bounds = [
+    { at: SEARCH_SCENES.morph1, next: 2 },
+    { at: SEARCH_SCENES.morph2, next: 3 },
+    { at: SEARCH_SCENES.chorus, next: 4 },
+    { at: SEARCH_SCENES.bridge, next: 5 },
+    { at: SEARCH_SCENES.outro, next: 6 }
+  ];
+  for (let i = 0; i < bounds.length; i++) {
+    const b = bounds[i];
+    if (n >= b.at - W && n < b.at) {
+      return { k: easeInOutQuart((n - (b.at - W)) / W), next: b.next };
+    }
+  }
+  return null;
+}
+
+/* ---------------------------------------------------------------------------
+   自动弹出的结果小卡：网格里的加号会自己"长"出一张结果卡，停一会儿再收回去。
+   完全由时间决定（hash 选格），所以暂停/拖动进度条都稳定，不闪。
+   --------------------------------------------------------------------------- */
+const AUTO_FORMS = ['table', 'eggplant', 'cat', 'steak', 'flower', 'human', 'dog', 'tomato'];
+function searchAutoPopups(frame, A, t) {
+  const L = A.L, C = COL();
+  const SLOT = 4, PERIOD = 2.6;
+  for (let s = 0; s < SLOT; s++) {
+    const tt = t + s * 0.7;
+    const ph = (tt % PERIOD) / PERIOD;                 // 0..1 一轮
+    if (ph > 0.78) continue;                           // 收回去的空档
+    const cyc = Math.floor(tt / PERIOD);
+    const gx = Math.round(L.cx0 + 5 + hash11(cyc * 7.31 + s * 2.17) * (L.cx1 - L.cx0 - 12));
+    const gy = Math.round(L.mainTop + 2 + hash11(cyc * 3.77 + s * 5.31) * (L.mainBot - L.mainTop - 8));
+    const form = AUTO_FORMS[Math.abs(Math.round(hash11(cyc * 1.93 + s) * 97)) % AUTO_FORMS.length];
+    const info = FORM_INFO[form] || [form.toUpperCase(), ''];
+    const name = info[0].slice(0, 12);
+    const pct = 82 + (Math.abs(Math.round(hash11(cyc * 2.71 + s * 3.3) * 17)) % 18);
+    // 长出 / 收回
+    const grow = clamp(ph / 0.12, 0, 1) * clamp((0.78 - ph) / 0.12, 0, 1);
+    if (grow <= 0.02) continue;
+    // 源格高亮
+    frame.set(gx, gy, '@', C.alert, grow > 0.6);
+    frame.set(gx - 1, gy, '-', C.mid);
+    frame.set(gx + 1, gy, '-', C.mid);
+    // 小卡：向右上偏移，带一条引线
+    const w = 18, h = 5;
+    let bx = gx + 3, by = gy - 4;
+    if (bx + w > L.cx1 - 1) bx = gx - w - 3;
+    if (by < L.mainTop) by = gy + 2;
+    const vis = Math.round(grow * w);
+    for (let j = 0; j < h; j++) {
+      for (let i = 0; i < w; i++) {
+        if (i > vis) continue;
+        frame.erase(bx + i, by + j);
+        if (((i + j) % 3) === 0) frame.set(bx + i, by + j, '.', C.deep);
+      }
+    }
+    if (grow > 0.5) {
+      for (let i = 2; i < w - 1; i++) { frame.set(bx + i, by, '-', C.mid); frame.set(bx + i, by + h - 1, '-', C.mid); }
+      for (let j = 1; j < h - 1; j++) { frame.set(bx, by + j, '|', C.mid); frame.set(bx + w - 1, by + j, '|', C.mid); }
+      frame.text(bx + 2, by + 1, name, C.bright, true);
+      frame.rightText(bx + w - 2, by + 1, pct + '%', C.alert);
+      frame.text(bx + 2, by + 2, info[1].slice(0, w - 4), C.dark);
+      frame.text(bx + 2, by + 3, 'form #' + (Math.abs(cyc * 13 + s * 7) % 997), C.deep);
+    }
+  }
+}
+
+/* 搜索结果弹窗：点缩略图浮出来 */
+function drawSearchPopup(f) {
+  if (!SEARCH_POP.open) return;
+  const L = getL(), C = COL();
+  const info = FORM_INFO[SEARCH_POP.form] || [String(SEARCH_POP.form).toUpperCase(), ''];
+  const w = Math.min(78, L.C - 16), x = Math.floor((L.C - w) / 2), y = Math.round(L.R * 0.26), bh = 11;
+  for (let j = 0; j < bh; j++) {
+    for (let i = 0; i < w; i++) {
+      f.erase(x + i, y + j);
+      if (((i + j) % 4) === 0) f.set(x + i, y + j, '.', C.deep);
+    }
+  }
+  f.box(x, y, w, bh, C.alert, 'SEARCH RESULT', C.bright);
+  f.text(x + w - 12, y, '[X] CLOSE', C.mid);
+  f.text(x + 3, y + 2, 'form   : ' + info[0], C.bright, true);
+  f.text(x + 3, y + 4, 'match  : ' + SEARCH_POP.match + '%', C.alert, true);
+  f.text(x + 3, y + 6, 'query  : search(you, { form: ' + info[0] + ' })', C.mid);
+  f.text(x + 3, y + 8, 'notes  : ' + info[1], C.dark);
+  f.centerText(y + bh - 2, 'click anywhere to close', C.deep);
+}
+function searchClickAt(gx, gy) {
+  let best = null, bd = 1e9;
+  for (let i = 0; i < SEARCH_HIT_N; i++) {
+    const H = SEARCH_HITS[i];
+    if (!H.live) continue;
+    const d = Math.abs(H.x - gx) + Math.abs(H.y - gy) * 2;
+    if (d < bd) { bd = d; best = H; }
+  }
+  if (best && bd <= 8) {
+    SEARCH_POP.open = true;
+    SEARCH_POP.form = best.form;
+    SEARCH_POP.match = 90 + (Math.abs(Math.round(hash11(best.x * 3.1 + best.y) * 99)) % 10);
+    SEARCH_POP.t0 = performance.now();
+    SRC.box = { x: 0, y: 0, w: 0, h: 0 };
+    return true;
+  }
+  return false;
+}
+function renderSearchStage() {
+  const f = FRAME;
+  const t = mvTime();
+  const total = AUDIO.duration || 1;
+  updateLyricVis(t, total);
+  const u = clamp(t / total, 0, 1);
+  SEARCH_HIT_N = 0;                        // 每帧重置命中池（对象复用，不新建）
+  const si = searchSceneAt(t);
+  // 切场景瞬间：短故障 + 轻震反馈
+  if (si !== renderSearchStage._last) {
+    if (renderSearchStage._last) { triggerGlitch(0.18); triggerShake(0.20); }
+    renderSearchStage._last = si;
+  }
+  renderSearchContent(f, si, t, u);
+  // 与第一首相同的边界溶解过渡
+  const blend = (STASH.ch && STASH.ch.length === f.cols * f.rows) ? searchBlendInfo(t) : null;
+  if (blend) {
+    stashFrame(f);
+    renderSearchContent(f, blend.next, t, u);
+    dissolveFrames(f, blend.k);
+  }
+  // 网格段：让加号自己弹出结果卡（动画），用户点击仍能开大弹窗
+  if (si === 4 || (VIS.m && VIS.m.form === 'grid')) searchAutoPopups(f, searchArea(), t);
+  drawSearchPopup(f);
+  present(f);
+}
+
+/* ---------- 第二首的歌词：不做打字机，淡入 ---------- */
+function drawLyricsSearch(frame, t) {
+  const L = getL(), C = COL();
+  if (VIS.idx < 0 || !VIS.line) return;
+  const a = clamp(VIS.p / 0.25, 0, 1);
+  const col = mixRGB(hexToRgb(C.black), hexToRgb(C.bright), 0.25 + a * 0.75);
+  const colCn = mixRGB(hexToRgb(C.black), hexToRgb(C.dark), 0.2 + a * 0.8);
+  const en = VIS.line.en, cn = VIS.line.cn;
+  if (en) {
+    const w = strW(en) + 2, x0 = Math.floor((L.C - w) / 2);
+    for (let i = 0; i < w; i++) frame.erase(x0 + i, L.lyr);
+    frame.centerText(L.lyr, en, col, a > 0.6);
+  }
+  if (cn) {
+    const w2 = strW(cn) + 2, x1 = Math.floor((L.C - w2) / 2);
+    for (let i = 0; i < w2; i++) frame.erase(x1 + i, L.lyrCn);
+    frame.centerText(L.lyrCn, cn, colCn);
+  }
+}
+
+/* ---------- SHUTDOWN：MV 结束后的 Y/N ---------- */
+const SHUT = { t0: 0, phase: 'prompt', outT0: 0, line: 0 };
+function renderShutdownStage() {
+  const f = FRAME, L = getL(), C = COL();
+  const now = performance.now();
+  if (!SHUT.t0) SHUT.t0 = now;
+  const dim = clamp((now - SHUT.t0) / 9000, 0, 1);          // 亮度逐渐降低
+  const k = 1 - dim * 0.78;
+  f.clear();
+  const lines = [
+    '> EXECUTION COMPLETE.',
+    '> SELF SYSTEM WILL NOW SHUT DOWN.',
+    '> PROCEED?   [Y/n]'
+  ];
+  const baseY = Math.round(L.R * 0.42);
+  const p = SHUT.phase === 'out' ? clamp((now - SHUT.outT0) / 800, 0, 1) : 0;
+  for (let i = 0; i < lines.length; i++) {
+    // 关机动画：整行向底部收缩，同时亮度衰减到 0
+    const y = Math.round(baseY + i * 3 + p * (L.R - 3 - (baseY + i * 3)));
+    const kk = SHUT.phase === 'out' ? k * (1 - p) : k;
+    f.centerText(y, lines[i], mixRGB(hexToRgb(C.black), hexToRgb(i === 2 ? C.pure : C.bright), kk), i === 2);
+  }
+  if (SHUT.phase !== 'out') {
+    const blink = (now % 1000) < 520;
+    if (blink) {
+      const w = strW(lines[2]);
+      f.set(Math.floor(L.C / 2 + w / 2) + 2, baseY + 6, '_', C.pure, true);
+    }
+    f.centerText(L.R - 2, '[Y] SHUT DOWN      [N] SEARCH', C.dark);
+  }
+  if (SHUT.phase === 'out' && p >= 1) { try { location.reload(); } catch (e) { /* 忽略 */ } }
+  present(f);
+}
+
+/* ---------- SEARCH_INPUT：输入 world.search(you); ---------- */
+const SEEK = { text: '', errT: 0, okP: 0, ok: false, started: false };
+const SEEK_KEY = 'world.search(you);';
+function seekNormalize(s) {
+  return String(s || '').trim().toLowerCase().replace(/;+$/, '');
+}
+function seekCheck() {
+  if (seekNormalize(SEEK.text) === seekNormalize(SEEK_KEY)) {
+    SEEK.ok = true; SEEK.okP = 0;
+    return true;
+  }
+  SEEK.errT = 1000;
+  return false;
+}
+function renderSearchInputStage(dt) {
+  const f = FRAME, L = getL(), C = COL();
+  if (!SEEK.started) { SEEK.started = true; seekFocus(true); }
+  f.clear();
+  const cx = Math.floor(L.C / 2), cy = Math.round(L.R * 0.36);
+  const warm = SEEK.ok ? clamp(SEEK.okP / 1200, 0, 1) : 0;
+  const mix = function (h) { return mixRGB(hexToRgb(C.black), hexToRgb(h), 0.25 + (1 - warm) * 0.75); };
+  const blink = (performance.now() % 1200) < 600;
+  f.centerText(cy - 5, '> SEARCHING...', mix(C.mid));
+  const tw = strW(SEEK.text);
+  const caretX = cx + Math.round(tw / 2) + 1;
+  if (SEEK.text) f.rightText(caretX - 1, cy, SEEK.text, mix(C.bright), true);
+  f.set(caretX, cy, (blink || SEEK.ok) ? '_' : ' ', mix(C.pure), true);
+  if (SEEK.errT > 0) {
+    SEEK.errT -= dt * 1000;
+    if ((performance.now() % 300) < 220) f.centerText(cy + 5, '> INVALID COMMAND', C.alert, true);
+  }
+  if (!SEEK.ok) f.centerText(L.R - 3, 'TYPE  world.search(you);   ·   SPACE TO CONFIRM', C.dark);
+  else {
+    // 成功：一层暖色渐染，覆盖全屏
+    FX.tintColor = STYLE_PRESETS[STYLE_PRESETS.length - 1].colors.bright;
+    FX.tintAlpha = Math.max(FX.tintAlpha, warm * 0.5);
+  }
+  present(f);
+}
+function seekFocus(on) {
+  const el = document.getElementById('seekInput');
+  if (!el) return;
+  if (!on) { el.style.display = 'none'; return; }
+  const L = getL(), v = viewRect();
+  const cw = v.dw / CONFIG.gridCols, chh = v.dh / CONFIG.gridRows;
+  const cx = Math.floor(L.C / 2), cy = Math.round(L.R * 0.36);
+  el.style.display = 'block';
+  el.style.left = (v.dx + (cx - 30) * cw) + 'px';
+  el.style.top = (v.dy + (cy - 0.5) * chh) + 'px';
+  el.style.width = (60 * cw) + 'px';
+  el.style.height = (chh * 1.6) + 'px';
+  el.style.fontSize = Math.max(16, CONFIG.fontSize * cw / CONFIG.cellW) + 'px';
+  el.style.color = 'transparent';
+  el.style.background = 'transparent';
+  try { el.focus(); } catch (e) { /* 忽略 */ }
+}
+
+/* ---------- 第二首的加载与启动 ---------- */
+function prepareSong(song) {
+  SONGS.current = song;
+  const list = songCandidates(song);
+  const manual = SONGS.src[song];
+  AUDIO_CANDIDATES.length = 0;
+  if (manual && manual.url) AUDIO_CANDIDATES.push(manual.url);
+  for (let i = 0; i < list.length; i++) AUDIO_CANDIDATES.push(list[i]);
+  AUDIO.idx = 0; AUDIO.ok = false; AUDIO.failed = false; AUDIO.duration = 0;
+  loadSource(0);
+}
+function startSearchSong() {
+  STYLE.apply('CREAM');                  // apply 收的是预设 id
+  STYLE.current = 'CREAM';
+  // 只改运行期风格，不写 localStorage —— 否则下一次打开会把米黄当成"你选的风格"恢复
+  // （想恢复第一首的观感：刷新页面即可，存档里仍是用户当初选的预设）
+  try { audioEl.pause(); } catch (e) { /* 忽略 */ }
+  try { audioEl.currentTime = 0; } catch (e) { /* 忽略 */ }
+  prepareSong('search');
+  LOAD.song = 'search'; LOAD.to = 'MV';
+  LOAD.done = false; LOAD.t0 = performance.now(); LOAD.shown = 0; LOAD.forced = false;
+  enterStage('LOADING');
+}
 
 /* ---- 启动 ---- */
 const styleSelector = new StyleSelector();

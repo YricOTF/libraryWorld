@@ -7,6 +7,11 @@
 > 放到 GitHub Release 资产、对象存储或任何直链都行（注意 GitHub 网页上传单文件上限 25 MB，
 > 附带的是 25.9 MB 的 flac，网页上传会被拒；命令行 `git push` 上限 100 MB 则没问题）。
 > 仓库里放不下/不想放，转成 192 kbps mp3 大约 5 MB，最省事。
+>
+> **找不到音频时**：页面会停在 `ERROR: music.mp3 NOT FOUND`。这时按 `M`（或点 `AUDIO SOURCE` 框）
+> 上传本地文件或填网址即可，任何来源设置成功都会自动回到风格选择页。
+> 网址加载失败不会把你甩回报错页，而是在面板里写明原因（`UNSUPPORTED / 403 / 404`、`NETWORK ERROR`、
+> `DECODE ERROR`）——网易云那类带防盗链的 CDN 直链通常就是 403，换自己的存储直链最稳。
 
 ## 音频放哪
 
@@ -36,7 +41,9 @@ music.mp3  →  music.flac  →  music.ogg  →  music.wav  →  music.m4a
 
    **屏幕震动**：整屏（画面层）位移，两个正弦叠加成衰减振荡，扫描线与暗角不动——相当于显像管被敲了一下。触发点：随机故障、EXECUTION 每句、倒计时每个数字、ILLEGAL ARGUMENTS（持续）、控制台段（持续微震）、You have left 之后随混乱度递增、心形心跳、裂缝每 1.2 秒、MV 开场。幅度是强度平方 × 最大 20px，约 0.45 秒收尾。
 
-   **动效风格**：所有图形动画走 **10fps 台阶时钟**（`stepT()`）并带 ±1 格抖动，刻意不做平滑插值；旋涡、示波器、交流波这类原本按秒循环的相位改成**按句内进度走完一遍**，不会在一句里转好几圈。
+   **动效风格**：所有图形动画走 **10fps 台阶时钟**（`stepT()`），刻意不做平滑插值；旋涡、示波器、交流波这类原本按秒循环的相位改成**按句内进度走完一遍**，不会在一句里转好几圈。图形位置固定，不做上下跳动。
+
+   **代码同行**：开局自检每一行右侧并排显示它正在执行的语句（`self.protection = SEALED;` …），主歌 `If I'm a …` 各段在图下方打出对应语句（`if (me instanceof Points)` / `me.give(you, nutrients);` / `me.heart.break();` …）。
 
 ## 按键
 
@@ -60,6 +67,78 @@ music.mp3  →  music.flac  →  music.ogg  →  music.wav  →  music.m4a
 默认 **`LYRICS_SOURCE = 'LRC'`**：用随附 `.lrc` 的**真实时间戳**（秒 ÷ 实际时长），逐句与人声同步（123 句英文原词 + 中文翻译）；场景边界也从同一批关键句换算，两边必然同源。
 改成 `'USER'` 会切到人工段落表（按段落均分百分比那份），场景边界同时退回它自己的一组——但那份不与人声对齐。
 
+## 第二首：world.search(you);
+
+第一首播完不进静态结束页，而是 `SHUTDOWN` 阶段：
+
+```
+> EXECUTION COMPLETE.
+> SELF SYSTEM WILL NOW SHUT DOWN.
+> PROCEED?   [Y/n]          <- 光标闪烁，亮度随时间逐渐降低
+[Y] 关机（0.8 秒字符向底部收缩 + 衰减到 0，然后 location.reload()）
+[N] 进入 SEARCH_INPUT
+```
+
+`SEARCH_INPUT`：屏幕中央偏上一个 1.2 秒周期的 `_` 光标，上方 `> SEARCHING...`，
+输入 `world.search(you);` 后按空格确认（忽略首尾空格、不区分大小写、分号可省）。
+输入错误会闪 `> INVALID COMMAND` 一秒。正确后 1.2 秒暖色渐染，切入第二首。
+
+第二首的音频候选链：`REMOTE_AUDIO2` → `music2.mp3` → `music2.flac` → `.ogg` → `.wav` → `.m4a`。
+找不到会停在 ERROR 页并给出 `[R] RELOAD`。歌词用同目录 LRC 的时间戳换算（74 句，中英对照）。
+
+**视觉与第一首完全相反**：`CREAM PAPER` 风格（暖米黄纸色 #F5E6C8 / 深暖黑 #1A1610，
+珊瑚橘 #E8956A 作强调）——没有扫描线、没有 RGB 分离、没有锐化，改成整幅模糊柔光（blur 叠加 0.25）
++ 4 张预生成噪点图循环的胶片颗粒（0.03）+ 暖褐暗角；点阵光晕（GlowEngine）整体关闭。
+
+**布局也不同**：没有侧栏、状态栏、进度条，只有顶部一行极简标题、中部 70% 画布、底部淡入式歌词
+（英文在上中文在下，都居中，不做打字机）。
+
+**六个场景**按歌词关键句自动定位边界（不是硬编码百分比）：
+
+| 段 | 起点 | 内容 |
+|---|---|---|
+| intro | 0 | 闪烁光标 + `SEARCHING` + 偶尔闪过的 `search(world, you)` |
+| morph1 | `If you turn into a table` | 涟漪扩散 → 桌子/茄子轮廓浮现，`You're the only perfect X` 时套珊瑚橘光圈（心跳脉动） |
+| morph2 | `If you're a cat` | 猫叫视觉化（边缘 m/w）、花瓣张开、搜索网格渐密 |
+| chorus | `I'm searching for` | 网格风暴：缩略图闪过 + 台阶式旋转成漩涡 |
+| bridge | `bucket of love` | 字符块先散开再向中心收拢成人形 |
+| outro | `If you're a dog` | 人形轮廓 + 柔光晕，最后 3 秒只剩 `world.search(you);` 闪烁 |
+
+**M 键面板**多了一项 `[5] TARGET SONG`：切换这套音源设置作用于第一首还是第二首
+（每首歌各记一份，给"另一首"设的不会打断当前播放）。
+## 音频缓存与曲库
+
+填网址时**不会直接播**，而是先把文件下载进浏览器缓存（Cache Storage），再当成本地音频播放：
+
+1. 面板 `[3] LOAD FROM URL` → 粘贴直链 → `Enter`
+2. 面板底部实时显示 `DOWNLOADING 42%`
+3. 成功后显示 `CACHED · 24.7 MB · 3 IN LIBRARY`，此时**断网也能播**
+4. `[4] CACHED LIBRARY` 打开缓存曲库：`↑↓` 选、`Enter` 播、`X` 删除、`Esc` 返回
+
+意义：下载一次就绕开了防盗链、过期签名、CDN 抖动；而且存的是字节，播放前不用再等缓冲。
+`Cache Storage` 只在安全上下文可用（https / localhost），`file://` 双击打开时会自动降级成直连播放。
+下载失败（CORS 不允许读取 / 403 / 404）会退回 `<audio>` 直连重试，并在面板里写明原因。
+
+> 注意：跨域下载要求对方返回 `Access-Control-Allow-Origin`。网易云那类 CDN 通常没有，
+> 所以会走"直连播放"回退——能不能出声取决于对方是否放行，不再是页面能控制的了。
+> 想要稳定离线：用 GitHub Release 资产、自己的对象存储，或直接上传本地文件。
+
+## 手机端
+
+## 音频来源默认值
+
+候选链第一位是远端直链 `https://ycbasr-d5gvv7az2cb986021-1316612369.tcloudbaseapp.com/music.flac`，所以**部署到 GitHub Pages 时仓库里不必放音频**；远端不通才回头找同目录的 `music.mp3 / music.flac / music.ogg / music.wav / music.m4a`。要换默认地址，改 `CONFIG` 上方的 `REMOTE_AUDIO` 一行。
+
+## 手机端
+
+- **横屏玩**：184×64 的字符网格在竖屏下没法看，竖着拿时会盖一层 `◤ ROTATE YOUR DEVICE ◢` 提示，转横屏自动进入。
+- **内置侧栏**：触屏设备右侧竖排一列按钮（样式跟随当前风格，边框用 `currentColor`），按阶段自动换；点把手 `›` 收起、`‹` 展开（不再压住底部字幕区）：
+  - 风格页 `▲ ▼ OK AUDIO`
+  - 加载页 `SKIP`（等太久可直接跳过）
+  - 对话页 `SEND`
+  - MV `◀◀ ❚❚ ▶▶ DEV`（暂停/快退快进 10 秒）
+- 也可以直接点画面：点风格列表选项、点 `AUDIO SOURCE` 框、点面板里的四行都能操作。
+- 首次触摸会解锁音频（iOS 的自动播放限制），输入框字号强制 ≥16px 以免页面被自动放大。
 ## 已知限制
 
 - 辉光（per-char `shadowBlur`）有帧预算上限，弱机会自动降级而不是掉帧；想要更炸的辉光可以在开发者面板把 GLOW STRENGTH 拉满。
