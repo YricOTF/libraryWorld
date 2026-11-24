@@ -1,6 +1,16 @@
-# world.execute(me); — ASCII / CRT 单文件 MV
+# libraryWorld — ASCII 歌词 MV
 
-双击 `index.html` 即可播放。**不需要服务器、不需要构建、不引用任何外部库**（无 CDN、无 WebGL）。
+双击 `index.html` 或打开 GitHub Pages 即可进入。项目使用 Canvas 2D，无需构建或安装依赖。音频使用远端来源，也可以在页面导入。
+
+| 文件 | 内容 |
+|---|---|
+| `index.html` 和 `assets/styles.css` | 页面结构、横屏提示和触屏控件样式 |
+| `assets/lyrics.js` | 两首歌的原有歌词和时间戳 |
+| `assets/engine.js` 和 `assets/ascii-scenes.js` | 字符网格、CRT 合成、ASCII 图案和绘制工具 |
+| `assets/execute.js` 和 `assets/search.js` | 各曲目的歌词画面和场景 |
+| `assets/player.js` 和 `assets/main.js` | 播放器、音源、交互和启动 |
+
+系统设置中的「减少动态效果」会关闭整屏摇晃、RGB 故障和闪屏，并简化印章入场、搜索卡片切换等动效。暂停时仍可用方向键跳转并查看对应歌词画面。
 
 > **部署到 GitHub Pages / 音频放哪**：在风格选择页按 **`M`** 打开 `AUDIO SOURCE` 面板，可以
 > ①用内置文件 ②上传本地音频 ③直接填网址。有了 ③，音频根本不必进仓库——
@@ -21,7 +31,7 @@
 music.mp3  →  music.flac  →  music.ogg  →  music.wav  →  music.m4a
 ```
 
-本目录已附带 `music.flac`（原曲，3:31.9），打开就能播。想换成 mp3 就丢一个 `music.mp3` 进来，它的优先级更高。
+仓库从已有远端地址尝试加载音频。使用本地音源时可以把 `music.mp3` 或 `music.flac` 放在 `index.html` 同目录，或从音源面板上传。
 
 五个都没有时画面会给出 `> ERROR: music.mp3 NOT FOUND.`，此时也可以**把音频文件直接拖进窗口**。
 
@@ -30,20 +40,8 @@ music.mp3  →  music.flac  →  music.ogg  →  music.wav  →  music.m4a
 1. **风格选择** — 六套 CRT 预设（冷白 / 琥珀 / 矩阵绿 / 警戒红 / 赛博青 / 纯黑白）。↑↓ 或鼠标选择，Enter 或点击已选中项确认；带 4 秒循环实时预览。选择结果写进 `localStorage`。
 2. **SELF SYNC** — 等待音频缓冲完成。进度条读的是**真实 buffered 比例**（不是装饰动画），四条子系统进度是按真实比例换算出来的；等超过 7 秒可以按 Enter 强制进入。
 3. **对话** — 输入 `你好` / `hello` / `hi` / `hey` 唤醒她（`this`、`high` 这类词不会误触发）。输入别的内容她会说没听懂，然后**重新给出输入框**。
-4. **MV** — 主视觉由**歌词驱动**：唱到哪一句就画那件事（`If I'm a circle` 画圆、`CIRCUMFERENCE` 沿圆周描边、`TANGENTS` 画切线、`VIBRATIONS` 画示波器、`Switch my gender` 画 F↔M……）。数学图形全部用参数方程真画，图标是 ASCII 贴图，**123 句里 122 句有自己的画面**（唯一例外是 0.1s 那句，落在开场 1 秒的不渲染窗口里，1 秒后补上）。
-   没有对应歌词的段落（前奏、间奏、纯音乐）才回落到场景自己的子阶段动画，此时场景边界 = 歌词关键句的真实时间点（29.709 / 88.587 / 147.660 / 178.173 秒 ÷ 实际时长）。动画时间 = `audio.currentTime - 起播时刻`。
-
-   **具体意象用具体画法**：`YOU HAVE LEFT` 每唱一句，背影小人就往右走远一段、颜色更淡一档（脚印留在身后、距离计数递增）；`COMPLETION` / `SATISFACTION` 是真的进度条（随句子填满并显示百分比）；`NUTRIENTS` 画维生素 C 的六元环骨架（C6H8O6 + OH 取代基 + 交替双键）、`ANTIOXIDANTS` 画番茄红素的长共轭链（C40H56）、`ALGEBRAIC EXPRESSION OF LO-O-OVE` 画心形线并标注 `(x²+y²−1)³ = x²y³`；茄子、番茄、花猫这些是重画过的高分辨率 ASCII 图（不是抽象符号）。
-
-   **叙事节奏**：官方歌词里 `Though you have left`（110.9s）是情绪拐点——从这里开始**每唱一句系统就烂得更彻底**（行位移 + 随机乱码 + 红色碎片逐级递增），到 `ILLEGAL ARGUMENTS` 亮出巨大的红色 `ILLEGAL / ARGUMENTS`；`EXECUTION` 十二连唱时换成**控制台疯狂刷执行语句**（exec(world, me); / kill(others.all); / syscall(9, SIGKILL); …，每行带 [ OK ] 或 [KILL]，台阶式高速滚动）；最后三秒收尾清空，只剩 `world.execute(me);` 与闪烁光标。
-
-   **开场**：第一句主歌之前的整段是 **`ME SYSTEM SELF TEST` 自检表**，唱一句点亮一行（POWER LINE / PROTECTION / PIECES / OBJECT CREATION / DATA PARAMETERS / INITIALIZATION / NEW WORLD / SIMULATION / CALL），底部配进度条；随后 13 秒间奏亮出**标题卡**（`MILI` 用点阵大字，标题与专辑名次之，不做成 execute 的强调）。
-
-   **屏幕震动**：整屏（画面层）位移，两个正弦叠加成衰减振荡，扫描线与暗角不动——相当于显像管被敲了一下。触发点：随机故障、EXECUTION 每句、倒计时每个数字、ILLEGAL ARGUMENTS（持续）、控制台段（持续微震）、You have left 之后随混乱度递增、心形心跳、裂缝每 1.2 秒、MV 开场。幅度是强度平方 × 最大 20px，约 0.45 秒收尾。
-
-   **动效风格**：所有图形动画走 **10fps 台阶时钟**（`stepT()`），刻意不做平滑插值；旋涡、示波器、交流波这类原本按秒循环的相位改成**按句内进度走完一遍**，不会在一句里转好几圈。图形位置固定，不做上下跳动。
-
-   **代码同行**：开局自检每一行右侧并排显示它正在执行的语句（`self.protection = SEALED;` …），主歌 `If I'm a …` 各段在图下方打出对应语句（`if (me instanceof Points)` / `me.give(you, nutrients);` / `me.heart.break();` …）。
+4. **MV** — 以 `audio.currentTime` 驱动双语歌词和画面。开场随歌词逐行点亮自检，间奏出现标题卡。圆由字符描线成形，再把圆周展开成刻度尺；振动段出现示波器余迹；茄子、番茄和虎斑猫由不同密度的字符组成，猫的呼噜从侧面向外扩散。
+   断线段的背影逐渐沿透视线远去，脚印留在原处。之后心形沿裂线分开，非法参数进入错误屏；执行队列随重复唱段滚动，尾声重新描出心形曲线。场景切换沿用歌词的章节时间戳。
 
 ## 按键
 
@@ -86,23 +84,15 @@ music.mp3  →  music.flac  →  music.ogg  →  music.wav  →  music.m4a
 第二首的音频候选链：`REMOTE_AUDIO2` → `music2.mp3` → `music2.flac` → `.ogg` → `.wav` → `.m4a`。
 找不到会停在 ERROR 页并给出 `[R] RELOAD`。歌词用同目录 LRC 的时间戳换算（74 句，中英对照）。
 
-**视觉与第一首完全相反**：`CREAM PAPER` 风格（暖米黄纸色 #F5E6C8 / 深暖黑 #1A1610，
-珊瑚橘 #E8956A 作强调）——没有扫描线、没有 RGB 分离、没有锐化，改成整幅模糊柔光（blur 叠加 0.25）
-+ 4 张预生成噪点图循环的胶片颗粒（0.03）+ 暖褐暗角；点阵光晕（GlowEngine）整体关闭。
+**CREAM PAPER** 使用暖米纸色、棕墨、印章红和细颗粒。上方为曲名和进度时间，下方是淡入的中英歌词。
 
-**布局也不同**：没有侧栏、状态栏、进度条，只有顶部一行极简标题、中部 70% 画布、底部淡入式歌词
-（英文在上中文在下，都居中，不做打字机）。
-
-**六个场景**按歌词关键句自动定位边界（不是硬编码百分比）：
-
-| 段 | 起点 | 内容 |
-|---|---|---|
-| intro | 0 | 闪烁光标 + `SEARCHING` + 偶尔闪过的 `search(world, you)` |
-| morph1 | `If you turn into a table` | 涟漪扩散 → 桌子/茄子轮廓浮现，`You're the only perfect X` 时套珊瑚橘光圈（心跳脉动） |
-| morph2 | `If you're a cat` | 猫叫视觉化（边缘 m/w）、花瓣张开、搜索网格渐密 |
-| chorus | `I'm searching for` | 网格风暴：缩略图闪过 + 台阶式旋转成漩涡 |
-| bridge | `bucket of love` | 字符块先散开再向中心收拢成人形 |
-| outro | `If you're a dog` | 人形轮廓 + 柔光晕，最后 3 秒只剩 `world.search(you);` 闪烁 |
+| 段落 | 画面 |
+|---|---|
+| 开场 | 查询光标与逐行浮现的预设片段 |
+| 形态 | 桌腿变短时桌面倾斜，茄子出现指甲痕，猫叫和狗叫带出声纹 |
+| 寻找 | 八张可点击的 ASCII 缩略图轮流扫描，形态失控时替换图案，旧自我只剩渐隐轮廓 |
+| 拆分与重组 | 三只容器以不同水位表现歌词，同一人像先散成字符块，再按原轮廓合拢 |
+| 尾声 | 小狗与番茄依歌词依次出现，随后留下歌名和光标 |
 
 **M 键面板**多了一项 `[5] TARGET SONG`：切换这套音源设置作用于第一首还是第二首
 （每首歌各记一份，给"另一首"设的不会打断当前播放）。
@@ -123,11 +113,9 @@ music.mp3  →  music.flac  →  music.ogg  →  music.wav  →  music.m4a
 > 所以会走"直连播放"回退——能不能出声取决于对方是否放行，不再是页面能控制的了。
 > 想要稳定离线：用 GitHub Release 资产、自己的对象存储，或直接上传本地文件。
 
-## 手机端
-
 ## 音频来源默认值
 
-候选链第一位是远端直链 `https://ycbasr-d5gvv7az2cb986021-1316612369.tcloudbaseapp.com/music.flac`，所以**部署到 GitHub Pages 时仓库里不必放音频**；远端不通才回头找同目录的 `music.mp3 / music.flac / music.ogg / music.wav / music.m4a`。要换默认地址，改 `CONFIG` 上方的 `REMOTE_AUDIO` 一行。
+候选链第一位是远端直链 `https://ycbasr-d5gvv7az2cb986021-1316612369.tcloudbaseapp.com/music.flac`，所以**部署到 GitHub Pages 时仓库里不必放音频**；远端不通才回头找同目录的 `music.mp3 / music.flac / music.ogg / music.wav / music.m4a`。要换默认地址，编辑 `assets/player.js` 的 `REMOTE_AUDIO` 或 `assets/search.js` 的 `REMOTE_AUDIO2`。
 
 ## 手机端
 

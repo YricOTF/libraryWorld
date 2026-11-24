@@ -1,0 +1,85 @@
+/* ===========================================================================
+   页面样式：只做三件事 —— 黑底居中、canvas 铺满、HTML 输入框伪装成终端光标行
+   所有视觉（颜色 / 辉光 / 扫描线 / 暗角 / 故障）都在 canvas 里逐字符绘制，
+   CSS 只负责"机壳"部分。
+   =========================================================================== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%; overflow: hidden;
+  overscroll-behavior: none; -webkit-user-select: none; user-select: none;
+  /* CRT 机壳黑：任何风格下都成立的中性底色（不在六套预设的"画面色"约束内） */
+  background: #000;
+  -webkit-tap-highlight-color: transparent;
+}
+body { display: flex; align-items: center; justify-content: center; }
+#stage { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+
+#mainCanvas {
+  position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block;
+  /* 屏幕弯曲：幅度 < 1%，只做极轻微的四角收圆 + 透视，避免几何失真 */
+  border-radius: 14px;
+  transform: perspective(1400px) scale(0.999);
+  transform-origin: 50% 50%;
+  /* 让放大后的字符保持柔和（真正的清晰度控制交给 canvas 的 imageSmoothing） */
+  image-rendering: auto;
+}
+
+/* 行内输入框（对话 / 音频网址）：透明、无边框、颜色跟随当前风格 */
+#userInput, #urlInput, #seekInput, #songInput {
+  position: absolute; display: none;
+  background: transparent; border: none; outline: none;
+  border-bottom: 1px solid currentColor;
+  font-family: 'Courier New', 'Consolas', 'Menlo', monospace;
+  letter-spacing: 0; padding: 0 2px; line-height: 1.1;
+  caret-color: currentColor;
+}
+#userInput::selection { background: rgba(255,255,255,.25); }
+
+/* ---- 触屏按钮条：只有触屏设备显示，样式跟着当前风格走（颜色由 JS 注入 currentColor） ---- */
+/* 侧栏形态：贴右边竖排，可折叠成一个把手（不再压住底部字幕区） */
+#pad {
+  position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+  display: none; flex-direction: column; gap: 6px; padding: 6px;
+  width: calc(84px + env(safe-area-inset-right, 0px));
+  padding-right: calc(6px + env(safe-area-inset-right, 0px));
+  box-sizing: border-box; touch-action: manipulation; z-index: 3;
+}
+#pad.on { display: flex; }
+#pad.collapsed { display: none; }
+#padToggle {
+  position: absolute; top: 50%; transform: translateY(-50%); right: 0;
+  display: none; width: 30px; padding: 14px 0; z-index: 4;
+  font-family: 'Consolas', 'Menlo', 'Courier New', monospace;
+  font-size: 16px; line-height: 1; color: inherit; background: rgba(0,0,0,.6);
+  border: 1px solid currentColor; border-right: none; border-radius: 3px 0 0 3px;
+  opacity: .8; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+}
+#padToggle.on { display: block; }
+#padToggle.open { right: calc(84px + env(safe-area-inset-right, 0px)); border-right: 1px solid currentColor; border-radius: 3px; }
+#padToggle:active { opacity: 1; background: rgba(255,255,255,.14); }
+#pad button {
+  flex: 1 1 0; min-height: 46px; padding: 0 4px;
+  font-family: 'Consolas', 'Menlo', 'Courier New', monospace;
+  font-size: 15px; letter-spacing: .12em; text-transform: uppercase;
+  color: inherit; background: rgba(0,0,0,.55);
+  border: 1px solid currentColor; border-radius: 3px;
+  opacity: .82; touch-action: manipulation; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+#pad button:active { opacity: 1; background: rgba(255,255,255,.14); }
+#pad button[hidden] { display: none; }
+
+/* ---- 竖屏提示：手机竖着拿时，184 列的字符画没法看，直接请他转屏 ---- */
+#rotate {
+  position: absolute; inset: 0; display: none;
+  align-items: center; justify-content: center; flex-direction: column; gap: 14px;
+  font-family: 'Consolas', 'Menlo', 'Courier New', monospace;
+  font-size: 15px; letter-spacing: .18em; text-align: center; line-height: 1.9;
+  background: #000; z-index: 5;
+}
+@media (orientation: portrait) and (pointer: coarse) {
+  #rotate { display: flex; }
+}
+body { overscroll-behavior: none; }
+canvas { touch-action: none; }
+#rotate .grid-note { opacity: .55; }
